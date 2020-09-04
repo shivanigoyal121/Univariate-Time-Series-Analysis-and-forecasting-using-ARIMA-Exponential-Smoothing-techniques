@@ -1,0 +1,3300 @@
+---
+title: "TSASSIGNMENT3_ShivaniGoyal_R00183301"
+author: "Shivani Goyal(R00183301)"
+date: "17/05/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+***Declaration of Authorship***
+
+I, Shivani Goyal , declare that the work presented in it are my own except for others work which is clearly referenced.
+
+Signed: Shivani Goyal<br>
+Date: May 24,2020<br>
+
+***PART 1 - TIME SERIES ANALYSIS***
+
+Loading and installing all the Required packages
+
+```{r, message=FALSE}
+library(readr)
+library(tidyr)
+library(ggplot2)
+library(pastecs)
+library(dplyr)
+library(VIM)
+library(corrplot)
+library(imputeTS)
+library(lubridate)
+library(forecast)
+library(tseries)
+```
+
+***1 - Reading the Assignment Dataset.***
+The provided data file is excel file. The structure of the data is corrected by following given steps below:-
+
+1. Reading the Assignment Dataset
+
+```{r, message=FALSE, warning=FALSE}
+Assignment_Data <- read_csv("E:/shivani_timeseries/Assignment Data.csv", col_names = FALSE)
+Assignment_Data<- as.data.frame(Assignment_Data)
+head(Assignment_Data)
+```
+
+2. Converting the data to numeric data
+```{r, message=FALSE, warning=FALSE}
+Assignment_Data <- Assignment_Data %>% mutate_if(is.character,as.numeric)
+```
+
+
+3. Reading the TEXT file having list of attribute names of "Assignment_Data"
+
+```{r, message=FALSE, warning=FALSE}
+columnNames <- read_csv("E:/shivani_timeseries/Assignment_columnnames.txt", col_names = FALSE)
+columnNames
+```
+
+
+4. Assigning column names to Assignment data
+```{r}
+colnames(Assignment_Data) <- columnNames$X1
+names(Assignment_Data)
+```
+
+#structure of the Data
+```{r}
+head(Assignment_Data)
+```
+
+**Visualising the Missing Data**
+
+```{r}
+aggr(Assignment_Data[,-c(1)], combined = TRUE, numbers = TRUE)
+```
+
+
+From the detailed summary of each variable we observes that many attributes have missing data. 
+
+Below are the attributes for which we will be forecasting:-
+
+WSR_PK: continuous. peek wind speed -- resultant (meaning average of wind vector) 
+T_PK: continuous. Peak T 
+T_AV: continuous. Average T 
+T85: continuous. T at 850 hpa level (or about 1500 m height) 
+RH85: continuous. Relative Humidity at 850 hpa 
+HT85: continuous. Geopotential height at 850 hpa, it is about the same as height at low altitude 
+T70: continuous. T at 700 hpa level (roughly 3100 m height) 
+KI: continuous. K-Index 
+TT: continuous. T-Totals 
+SLP: continuous. Sea level pressure 
+SLP_: continuous. SLP change from previous day  
+
+***Subselecting the variables to be forecasted from the Assignment_Data and storing it as new dataframe as "ozoneData"***
+
+```{r}
+ozoneData <- subset(Assignment_Data,select = c("WSR_PK","T_PK","T_AV","T85","RH85","HT85","T70","KI","TT","SLP","SLP_"))
+str(ozoneData)
+```
+
+#Below displays the detailed summary for each variable of "ozoneData" dataset
+
+```{r}
+summary(ozoneData)
+```
+
+```{r,echo=FALSE}
+stat.desc(ozoneData)
+```
+
+**OBSERVATION:** <br>
+Each variable has a large amount of missing data. It could also be noticed that all variables are on differnt scales with respect to each other.
+
+**EDA throgh Visualisation Method**
+
+#Plotting histogram for each variable
+```{r}
+ggplot(gather(ozoneData), aes(value))+geom_histogram(bins = 10)+ facet_wrap(~key,scales='free_x') 
+```
+
+**OBSERVATIONS**<br>
+1) "SLP", "SLP_" and "WSR_PK" variables seems to be normally distributed. <br>
+2) KI, RH85, T_AV, T_PK, T70 , T85 and TT all these variables are left skewed. Means most of the observations are observed at right side of the graph having larger value compared to left side of the graph.
+
+
+***Plotting boxplots for each variable***
+
+OUTLIERS: 
+
+```{r}
+boxplot(ozoneData, main = "Boxplot of all variables")
+```
+
+#Boxplot
+
+```{r}
+boxplot(ozoneData[,-c(6,10)], main = "Boxplot of same scale variables")
+```
+
+
+**DEALING WITH OUTLIERS FOR TIME SERIES DATA**
+
+An outlier is a point that falls far from the data points. It's a point that is extreme in some ways. Outliers in a data could be depicted from plotting outliers. The points which lies outside the whisker box are considerd to be outliers.<br>
+Here, we see we have many outliers for each variable. However, these datapoint does not seems to be potential outliers as most of the datapoints occurs in bulk.<br>
+For time series data, outliers may be errors, or they may simply be unusual. Many time series models are outliers sensitive means they won't work well if there are extreme outliers in the data.
+
+If the outliers are genuinely errors, then these outliers could be removed easily[1].
+However, simply removing outliers could be misleading. This could lead to loss of usefull information which needs to be taken into account while forecasting. Here, we dont notice any extreme outliers for our dataset. So, we are not removing outliers as they  dont seem to be potential outliers. 
+
+**DEALING WITH MISSING VALUES FOR TIME SERIES DATA**
+
+#Plot to visualise missing data using "VIM" package,
+
+```{r}
+aggr(ozoneData, numbers = TRUE, prop = c(TRUE, FALSE))
+```
+
+**OBSERVATIONs:**
+1) On total 2090 observations are present in the data without any missing information.<br>
+2) Most of the data is missing for WSR_PK comaparitively to other variables.<br>
+3) One interesting point could be observed that we have 12 such datapoints which are missing for all variables of "ozoneData".<br>
+
+
+There could be four type of Time Series Data:-
+
+1. No trend or Seasonality (white noise)<br>
+2. Has Trend but no Seasonality<br>
+3. Has Seasonality but No Trend<br>
+4. Has both Seasonality and Trend<br>
+
+Missing Values of Time Series Data is dealt depending on the type of our time series data.<br>
+The R functions for ARIMA models, dynamic regression models and NNAR models will also work correctly without causing errors. However, other modelling functions do not handle missing values including ets(), stlf(), and tbats()[1].
+
+
+Following are the Time-Series Specific Method for dealing with missing values:
+
+1. Last Observation Carried Forward (LOCF) & Next Observation Carried Backward (NOCB)<br>
+This is a popular statistical approach to analysis of longitudinal repeat measurement data where some follow-up observations may be missing. Longitudinal data tracks the same sample at various points in time. Both methods can introduce bias in analysis and perform poorly when data has a visible trend[2].
+
+2. Linear Interpolation<br>
+This method is used for such time series data which has trend but no seasonality.
+
+3. Seasonal Adjustment + Linear Interpolation<br>
+This method works best for those time series data which has both trend and seasonality.
+
+#Converting all the variables of ozoneData to time series data such that it starts from the starting month of the year 1998.
+
+```{r}
+tsWSR_PK <- ts(ozoneData$WSR_PK,start = decimal_date(as.Date("1998-01-01")), frequency = 365)
+tsT_PK <- ts(ozoneData$T_PK,start = decimal_date(as.Date("1998-01-01")), frequency = 365)
+tsT_AV <- ts(ozoneData$T_AV,start = decimal_date(as.Date("1998-01-01")), frequency = 365)
+tsT85 <- ts(ozoneData$T85,start = decimal_date(as.Date("1998-01-01")), frequency = 365)
+tsRH85 <- ts(ozoneData$RH85, start = decimal_date(as.Date("1998-01-01")), frequency = 365)
+tsHT85 <- ts(ozoneData$HT85, start = decimal_date(as.Date("1998-01-01")), frequency = 365)
+tsT70 <- ts(ozoneData$T70, start = decimal_date(as.Date("1998-01-01")), frequency = 365)
+tsKI <- ts(ozoneData$KI, start = decimal_date(as.Date("1998-01-01")), frequency = 365)
+tsTT <- ts(ozoneData$TT, start = decimal_date(as.Date("1998-01-01")), frequency = 365)
+tsSLP <- ts(ozoneData$SLP, start = decimal_date(as.Date("1998-01-01")), frequency = 365)
+tsSLP_ <- ts(ozoneData$SLP_,start = decimal_date(as.Date("1998-01-01")), frequency = 365)
+```
+
+
+**FOR 1st VARIABLE: Forecasting on Peak Wind Speed(WSR_PK)**
+
+#Checking the attributes of time series
+
+```{r}
+attributes(tsWSR_PK)
+```
+#Plotting the series 
+```{r}
+plot(tsWSR_PK, main = "Peak Wind Speed observed for years (WSR_PK)", ylim = c(0,10), col = "red")
+```
+
+From the plot, we observes that there is no trend but seems to have seasonlity.<br>
+Most of the data is missing for year 2002 to 2003 and within year 1998 to 1999 approximately.
+
+Checking the statistics and visualising the missing data in the series:
+
+```{r}
+statsNA(tsWSR_PK)
+```
+
+```{r}
+plotNA.distribution(tsWSR_PK)
+```    
+
+As we see there is a large gap in the missing data, so locf and NOCB would not seems the good technique to implement here. 
+
+Also, as no trend is being observed here, so not necessary to use "Kalman filter with arima state space model" as it works best for series having trend and seasonality.
+
+Hence, using "Linear interpolation" technique to impute missing values. This method works good for series having seasonality but no trend type of time series data.
+
+#Impute the missing values with "na_interpolation" function of "imputeTS package" and visualise the imputed values in the time series
+
+```{r}
+tsWSR_PK.imp <- na_interpolation(tsWSR_PK, method = "linear")
+plotNA.imputations(tsWSR_PK, tsWSR_PK.imp)
+```
+
+#Decomposition Of Time Series
+
+```{r}
+decomp <- decompose(tsWSR_PK.imp)
+plot(decomp, col = "red")
+```
+
+**OBSERVATIONS:**<br>
+1)There does not seems to have any trend.
+2)We observe some seasonality in the series. Means there is some seasonality in the movement of wind speed. Seasonality describes cyclical effects due to the time of the year.
+
+Let's explore this seasonality pattern by plotting the decomp$seasonal components such that y-axis represents Seasonality Index and x-axis has month
+
+```{r}
+plot(decomp$seasonal[1:365], type ='b', xlab = 'Years', ylab = 'Seasonality Index', col = 'blue', las = 2, main = "SEASONAL DATA")
+#las is for numbers to appear vertical
+```
+
+**OBSERVATIONS:**  
+1) There is 5 - 10% increase in the speed of wind in starting and end months of a year and we could think the reason because of arrival of winter i.e. seasonal change.
+2) There is a huge drop of wind speed for mid-months of the year 
+
+
+#Stationarity check of time series 
+
+**STATIONARY TIME SERIES:** It means when there is no change in the mean, variance or co-variance with time within the series. ARIMA models works with stationary series.<br>
+Sometimes it is difficult to interpret the series is stationary or not by just looking. So there are some statistical tests which hepls to identify the stationarity of the series.
+
+We could check the stationarity of time series by ADF and KPSS Tests:
+
+1. Augmented Dickey- Fuller(ADF) t-statistic test for unit root
+
+The null and alternate hypothesis of this test are:
+
+H0: The series has a unit root(value of a =1)<br>
+Ha: The series has no unit root <br>
+
+If we fail to reject the null hypothesis, we can say that the series is non-stationary. This means that the series can be linear or difference stationary[5]
+
+```{r}
+adf.test(tsWSR_PK.imp)
+```
+NOTE: Here p-value is less, so the series is stationary
+
+2. Kwiatkowski-Phillips-Schmidt-Shin (KPSS) for level or trend stationarity
+
+KPSS is another test for checking the stationarity of a time series.The null and alternate hypothesis for the KPSS test are opposite that of the ADF test,
+
+H0: The process is trend stationary<br>
+Ha: The series has a unit root(series is not stationary)<br>
+
+```{r}
+kpss.test(tsWSR_PK.imp, null="Trend")
+```
+NOTE: Here p-value is less, so the series is not stationary.
+
+Following are the possible outcomes:
+
+CASE1: BOTH TESTS RESULTS NOT STATIONARY, THEN SERIES IS NON STATIONARY<br>
+CASE2: BOTH TESTS RESULTS STATIONARY, THEN SERIES IS STATIONARY <br>
+CASE3: IF KPSS RESULTS STATIONARY AND ADF NOT STATIONARY, MEANS TREND STATIONARY(COULD REMOVE THE TREND TO MAKE IT STATIONARY) <br>
+CASE4: IF KPSS RESULTS NOT STATIONARY AND ADF STATIONARY, MEANS DIFFERENCE STATIONARY(COULD USE DIFFERENCING TO MAKE SERIES STATIONARY)<br>
+
+
+NOTE: From the both tests results, it leads to CASE4, we could recheck by visualising it i.e. by plotting ACF. 
+Second, we can check each for characteristics of stationarity by looking at the autocorrelation functions (ACF) of each signal. For a stationary signal, because we expect no dependence with time, we would expect the ACF to go to 0 for each time lag (τ). Lets visualize the signals and ACFs.
+
+Plotting ACF to check the auto-corelations 
+```{r}
+acf(tsWSR_PK.imp,lag.max = length(tsWSR_PK.imp),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+
+Here, we observes most of the data lies outside the blue-dotted lines means the significance level.
+Now, we will take the difference to make our data stationary.
+
+It seems difference of 1 is sufficient to make the series stationary. 
+```{r}
+tsWSR_PK.sta <- diff(tsWSR_PK.imp)
+acf(tsWSR_PK.sta, lag.max = length(tsWSR_PK.sta),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+
+Hence, after differencing our series is now transformed to stationary time series.
+
+#Visualising the stationary series
+```{r}
+plot(tsWSR_PK.sta, col = "red")
+```
+
+#CREATING MODELS AND FORECASTING: USING EXPONENTIAL SMOOTHING AND ARIMA TECHNIQUES FOR TIME SERIES FORECASTING
+
+##Exponential Smoothing TECHNIQUE FOR FORECASTING
+
+It is one of the most popular time series technique which uses historical data's inherent characterstics as input to forecast. The forecasting horizon should be short-term such as the next quarter or potentially six months[5].
+There are different exponential smoothing methods that differ from each other in the components of the time series that are modeled[5].
+
+This includes "Simple Exponential Smoothing(ses)"- uses one smoothing constant ,"Holt exponential smoothing(holt)" - uses 2 smoothing constant, "Holt-Winter Exponential Smoothing(hw)"- uses 3 smoothing constant and "Automated exponential smoothing forecasts".
+
+For "ses" and "Holt exponential smoothing" methods ,the seasonal fluctuations in the data are not part of the model.The method to do so in exponential smoothing is by using "Holt-Winter exponential smoothing", "Automated exponential smoothing forecasts" methods.
+
+As for "tsWSR_PK.imp" does not have trend but seems to have seasonality, will fit automated exponential smoothening model 
+
+##ARIMA TECHNIQUE
+
+ARIMA stands for AUTOREGRESSIVE MOVING AVERAGE MODEL.<br>
+a. Auto Regressive (p) - Lags of the variables itself <br>
+b. Integrated(d) - Differencing steps required to make stationary<br>
+c. Moving Average - Lags of previous information
+
+ARIMA are also renamed as:
+
+AR Model i.e. ARIMA(1,00), MA model i.e. ARIMA(0,0,1) and ARMA model i.e. ARIMA(0,0,1).<br>
+ARIMA gives results based on lowest AIC.
+
+#Fit automated exponential smoothing model and ARIMA models to training dataset and calculate forecast accuracy
+
+1.Train - Test Split of the data
+```{r}
+train <- window(tsWSR_PK.imp, end = c(2004, 3))
+test <- window(tsWSR_PK.imp, start = c(2004, 4))
+```
+
+
+#Model 1 : Auto Exponential Smoothening Model
+
+```{r}
+set.seed(301)
+fit_auto_train <- forecast(train)
+summary(fit_auto_train)
+```
+
+NOTE: #AIC = 16371.83 , BIC = 16388.91, RMSE = 0.8912478
+
+Also, the headline of the plot below contains ETS(A,N,N) showing that the automated model characterized error of the “tsWSR_PK” SERIES as Additative (A), trend as None (A) and seasonality as None (N) which is equivalent to simple exponential model(ses) with only alpha parameter i.e level.
+
+
+#Model 2 : ARIMA Models(AutoRegressive Moving Average) 
+
+It is used for forecasting for both seasonal and non- seasonal level.
+
+#Changing to stationary set
+```{r}
+train.sta <- diff(train)
+test.sta <- diff(test)
+```
+
+2.1 Auto Arima model without sesonality:
+
+```{r}
+set.seed(301)
+model <- auto.arima(train.sta, seasonal = FALSE)
+summary(model)
+```
+
+NOTE: #AIC = 6159.11 , BIC = 6187.58, RMSE = 0.9834439
+
+```{r}
+tsdisplay(residuals(model), lag.max = 45, main = '(1,1,1) Model Residuals')
+```
+
+2.2. Auto Arima model with sesonality:
+
+
+```{r}
+set.seed(301)
+model2 <- auto.arima(train.sta, seasonal= TRUE)
+summary(model2)
+```
+
+NOTE: #AIC = 6159.11 , BIC = 6187.58, RMSE = 0.9834439
+
+```{r}
+tsdisplay(residuals(model2), lag.max = 20, main = 'Seasonal Model Residuals')
+```
+
+NOTE: Above Graphs shows serious lags at 17, so modify model for p or q = 17
+
+3. Manual ARIMA: <br>
+
+Passing parameter order = (1,0,18) which means p(member of lags of a variable to be used as a predictor) = 1,
+d = 0(members of differences needed for stationarity) and q = 18 (moving average order - number of lagged forecasts error in the prediction equation)
+
+```{r}     
+set.seed(301)
+model1 <- arima(train.sta, order = c(1,0,18))
+summary(model1)
+```
+
+NOTE: #AIC = 6173.8 , RMSE = 0.9795425
+
+```{r}
+tsdisplay(residuals(model1), lag.max = 20, main = 'Seasonal Model Residuals')
+```
+
+Note: It seems good fit.
+
+
+***Fit the observed with the predicted values for both method models in the same plot. ***
+
+```{r}
+par(mfrow = c(2,2))
+fit_auto_train %>% forecast(h=341) %>% autoplot() + autolayer(test)
+model1 %>% forecast(h=341) %>% autoplot() 
+model2 %>% forecast(h=341) %>% autoplot() 
+model %>% forecast(h=341) %>% autoplot()  
+```
+
+COMMENT:<br>
+1. The plots includes 80% to 95% confidence interval.<br>
+2. For ARIMA models it plots the forecast but because of the nature of autoregressive process of 1 lag i.e. AR1, these forecast stabilizes quite smoothly.<br>
+
+***Plot and comment on the residuals of the fitted data for both models in the same plot.***
+ 
+Residual Plot - to confirm no problem with this model
+
+```{r}
+par(mfrow= c(2,2))
+hist(fit_auto_train$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model$residuals))
+
+hist(model$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model$residuals))
+
+hist(model1$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model$residuals))
+
+hist(model2$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model$residuals))
+```
+
+OBSERVATION: <br>
+The residuals for each model are normally distributed, which shows the good fit of the models.
+It is normally distrbuted.
+
+ 
+***Testing the autocorrelation and partial autocorrelation of the residuals (using the plots and Ljung-Box Q statistic*) up to an appropriate lag ***
+
+1. ACF & PACF Plots
+
+ACF(Autocorelation functions): These gives number of moving average(MA) terms in the model.<br>
+PACF(Partial Autocorelation Factors): There gives the number of AR terms in the model.
+
+
+```{r}
+par(mfrow = c(2,2))
+acf(fit_auto_train$residuals, main = 'Correlogram')
+acf(model$residuals, main = 'Correlogram')
+acf(model1$residuals, main = 'Correlogram')
+acf(model2$residuals, main = 'Correlogram')
+```
+
+```{r}
+par(mfrow = c(2,2))
+pacf(fit_auto_train$residuals, main = 'Partial Corelogram')
+pacf(model$residuals, main = 'Partial Corelogram')
+pacf(model1$residuals, main = 'Partial Corelogram')
+pacf(model2$residuals, main = 'Partial Corelogram')
+```
+
+
+NOTE: <br>
+1. Residuals are the difference between actaual and fitted values<br>
+2. These blue lines are signficance bounds.<br>
+3. This graph shows us the autocorelations for insample forecast errors<br>
+4. Do not exceed these significance bounds for lags 1 to end<br>
+
+Here, our model produce residuals that are normal.It is not exhibiting any pattern or structure, this sums to have a consistant variance. 
+
+2. Ljunx-Box Test to check the autocorelations of the residuals
+
+This test used to test the lack of fit of a time series model.
+This test is applied to the residuals of the time series model
+
+HO: No serial correlation upto 20 lags (does not exhibit lack of fit of the model)
+Ha: Serial corelation is present (the model exhibits lack of fit)
+
+We reject the null hypothesis, if p value is less than 0.05. This test is generally done for ARIMA models
+
+
+```{r}
+Box.test(model$residuals, lag =20, type = 'Ljung-Box')
+```
+
+```{r}
+Box.test(model1$residuals, lag =20, type = 'Ljung-Box')
+```
+
+```{r}
+Box.test(model2$residuals, lag =20, type = 'Ljung-Box')
+```
+
+OBSERVATIONS:<br>
+For above performed Ljunx-Box Test on model,model1 and model2 output, we can say that p-value is more than significance level 0.05, then there is not a statistical significance.
+We conclude that there is a little evidence of non-zero auto-corelations in the insample forecast errors at lags 1 to 20.<br>
+So we fail to rejects the null hypothesis. Hence, we conclude that there is no serial auto corelation present between lags. Hence, the model seems to be good fit.
+
+
+***Test and comment on the normality of the residuals. ***
+
+Here, further testing the normality by plotting Normal Q-Q plots. From below plots we observed that most of the datapoints lies on the line. Hence, we could conclude that our model produces residuals that are normal
+
+```{r}
+par(mfrow = c(2,2))
+qqnorm(fit_auto_train$residuals)
+qqnorm(model$residuals)
+qqnorm(model1$residuals)
+qqnorm(model2$residuals)
+```
+***Validating The Model by testing the model performance with Holdout set ***
+
+Here, choosing RMSE as evaluation parameter. The lower RMSE indicates a more accurate forecast.
+
+Below, is the comparison of model. We are fitting the model to test set which is the holdout set. And checking the accuracy using RMSE(Root mean square error) evaluation parameter. 
+
+```{r}
+accuracy(forecast(fit_auto_train), test) ["Test set", "RMSE"]
+#o/p - 1.273901
+```
+
+```{r}
+accuracy(forecast(model1), test.sta) ["Test set", "RMSE"]
+#O/P - 1.253145
+```
+
+```{r}
+accuracy(forecast(model2), test.sta) ["Test set", "RMSE"]
+#o/p - 1.253728
+```
+
+```{r}
+accuracy(forecast(model), test.sta) ["Test set", "RMSE"]
+#O/P - 1.253728
+```
+
+NOTE:- Here, the RMSE value is less of ARIMA models compared to exponential model.<br>
+The minimum RMSE is of model1. <br>
+The RMSE of auto arima models with seasonality and without seasonality have no difference. It gives the same result for this series.
+
+
+***COMMENT ON BEST MODEL AND ITS PARAMETERS***
+We observed the best model to be ARIMA model i.e."model1".
+
+```{r}
+summary(model1)
+```
+
+```{r}
+model1$coef
+```
+Passing parameter order = (1,0,18) ,which means 
+
+p = 1,
+d = 0
+q = 18 
+
+For the best model, 1 member of lag is used as a predictor. As we transformed the series to stationary so members of differences needed for stationarity is 0. 18 are the number of lagged forecasts errors used in the prediction equation.
+AIC = 6173.8, RMSE = 0.9795425 which is minimum as compared to other models.
+
+
+################################ FOR VARIABLE 2 ##############################################
+
+**2. Forecasting on Peak T (T_PK)**
+
+#Checking the attributes of time series
+```{r}
+attributes(tsT_PK)
+```
+
+#Plotting the series 
+```{r}
+plot(tsT_PK, main = "Peak tsT_PK", col = "red")
+```
+
+From the plot, we observes that there is no trend but seems to have seasonlity.<br>
+Most of the data is missing for year 2002 to 2003.
+
+Checking the statistics and visualising the missing data in the series:
+
+```{r}
+plotNA.distribution(tsT_PK)
+```
+
+As we see there is a large gap in the missing data, so locf and NOCB would not seems the good technique to implement here. 
+
+Hence, using "Linear interpolation" technique to impute missing values. This method works good for series having seasonality but no trend type of time series data.
+
+#Impute the missing values with "na_interpolation" function of "imputeTS package" and visualise the imputed values in the time series
+```{r}
+tsT_PK.imp <- na_interpolation(tsT_PK, method = "linear")
+plotNA.imputations(tsT_PK, tsT_PK.imp)
+```
+
+#Decomposition Of Time Series
+```{r}
+decomp1 <- decompose(tsT_PK.imp)
+plot(decomp1, col = "red")
+```
+
+**OBSERVATIONS:**<br>
+1)There does not seems to have any trend.<br>
+2)We observe some seasonality in the series. Means there is some seasonality. Seasonality describes cyclical effects due to the time of the year.
+
+Let's explore this seasonality pattern by plotting the decomp$seasonal components such that y-axis represents Seasonality Index and x-axis.
+
+#Visualising the seasonal component
+```{r}
+par(mfrow=c(1,2))
+plot(decomp1$seasonal, type ='b', xlab = 'Years', ylab = 'Seasonality Index', col = 'blue', las = 2, main = "SEASONAL DATA")
+plot(decomp1$seasonal[1:400], type ='b', xlab = 'Years', ylab = 'Seasonality Index', col = 'blue', las = 2, main = "SEASONAL DATA")
+```
+***OBSERVATION***<br>
+1) There is increase in the mid of months of a year.<br>
+2) There is a drop in peak T for starting and ending months of the year 
+
+#Stationarity check of time series 
+
+We could check the stationarity of time series by ADF and KPSS Tests:
+
+Augmented Dickey- Fuller(ADF) t-statistic test for unit root and Kwiatkowski-Phillips-Schmidt-Shin (KPSS) for level or trend stationarity Tests:
+
+```{r}
+adf.test(tsT_PK.imp)
+##It results stationary, as p-value is less than 0.05
+kpss.test(tsT_PK.imp, null="Trend")
+```
+NOTE: It results non- stationary as p-value is less than 0.05. More p-value means stationary series
+```{r}
+par(mfrow=c(1,1))
+acf(tsT_PK.imp,lag.max = length(tsT_PK.imp),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+#Here, most of the lags are outside the significance bound, which means data is not stationary
+
+#difference of 2 is sufficient
+```{r}
+acf(diff(tsT_PK.imp, diff = 2))
+```
+Here, we observes most of the data lies outside the blue-dotted lines means the significance level.
+Now, we will take the difference to make our data stationary.
+
+It seems difference of 2 is sufficient to make the series stationary
+
+```{r}
+tsT_PK.sta <- diff(tsT_PK.imp, diff = 2)
+attributes(tsT_PK.sta)
+acf(tsT_PK.sta, lag.max = length(tsT_PK.sta),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+
+Hence, after differencing our series is now transformed to stationary time series.
+
+#Visualising the stationary series
+
+```{r}
+plot(tsT_PK.sta, col = "red")
+```
+
+# CREATING MODELS AND FORECASTING: USING EXPONENTIAL SMOOTHING AND ARIMA TECHNIQUES FOR TIME SERIES FORECASTING
+
+1.Train - Test Split of the data
+```{r}
+train1 <- window(tsT_PK.imp, end = c(2004, 3))
+test1 <- window(tsT_PK.imp, start = c(2004, 4))
+```
+
+#Model 1 : Auto Exponential Smoothening Model
+```{r}
+set.seed(301)
+fit_auto_train_VAR2 <- forecast(train1)
+summary(fit_auto_train_VAR2)
+```
+NOTE: AIC = 21549.73 , BIC = 21566.81 , RMSE = 2.902054 
+
+Also, the headline of the plot below contains STL + ETS(A,N,N) showing that the automated model characterized error of the “tsT_PK” SERIES as Additative (A), trend as None (A) and seasonality as None (N) which is equivalent to simple exponential model(ses) with only alpha parameter i.e level.
+
+
+#Model 2 : ARIMA Model
+It is used for forecasting for both seasonal and non- seasonal level.
+
+#Changing to stationary set
+```{r}
+train.sta1 <- diff(train1, diff =2)
+test.sta1 <- diff(test1, diff =2)
+```
+
+2.1 Auto Arima model without sesonality:
+```{r}
+set.seed(301)
+model_VAR2 <- auto.arima(train.sta1, seasonal = FALSE)
+summary(model_VAR2)
+```
+
+NOTE: AIC = 11026.31 , BIC = 11060.46 , RMSE =2.983101
+
+```{r}
+tsdisplay(residuals(model_VAR2), lag.max = 45, main = '(1,1,1) Model Residuals')
+```
+
+#2.2 Auto Arima model with sesonality:
+```{r}
+set.seed(301)
+model2_VAR2 <- auto.arima(train.sta1, seasonal= TRUE)
+summary(model2_VAR2)
+```
+
+NOTE: AIC = 11800.97  , BIC = 11835.12 , RMSE =3.564718
+
+```{r}
+tsdisplay(residuals(model2_VAR2), lag.max = 20, main = 'Seasonal Model Residuals')
+```
+
+NOTE: Above Graphs shows serious lags at 5, so modify model for p or q = 5
+
+#2.3 Manual Arima
+
+Passing parameter order = (1,0,5) which means p(member of lags of a variable to be used as a predictor) = 1,
+d = 0(members of differences needed for stationarity) and q = 5 (moving average order - number of lagged forecasts error in the prediction equation)
+
+```{r}
+set.seed(301)
+model1_VAR2 <- arima(train.sta1, order = c(1,0,5))
+summary(model1_VAR2)
+```
+
+NOTE: AIC = 11026.94, RMSE =2.980804
+```{r}
+tsdisplay(residuals(model1_VAR2), lag.max = 20, main = 'Seasonal Model Residuals')
+```
+#Visualising forecast by each model
+```{r}
+par(mfrow = c(2,2))
+fit_auto_train_VAR2 %>% forecast(h=341) %>% autoplot() + autolayer(test1) 
+model1_VAR2 %>% forecast(h=341) %>% autoplot() 
+model2_VAR2 %>% forecast(h=341) %>% autoplot() 
+model_VAR2 %>% forecast(h=341) %>% autoplot() 
+```
+***Plot and comment on the residuals of the fitted data for both models in the same plot.***
+ 
+Residual Plot - to confirm no problem with this model
+
+```{r}
+par(mfrow= c(2,2))
+hist(fit_auto_train_VAR2$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(fit_auto_train_VAR2$residuals))
+
+hist(model_VAR2$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model_VAR2$residuals))
+
+hist(model1_VAR2$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model1_VAR2$residuals))
+
+hist(model2$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model2_VAR2$residuals))
+```
+OBSERVATION: The residuals for each model are normally distributed, which shows the good fit of the models.
+It is normally distrbuted.
+
+***Testing the autocorrelation and partial autocorrelation of the residuals (using the plots and Ljung-Box Q statistic*) up to an appropriate lag ***
+
+1. ACF & PACF Plots
+```{r}
+par(mfrow = c(2,2))
+acf(fit_auto_train_VAR2$residuals, main = 'Correlogram')
+acf(model_VAR2$residuals, main = 'Correlogram')
+acf(model1_VAR2$residuals, main = 'Correlogram')
+acf(model2_VAR2$residuals, main = 'Correlogram')
+```
+
+#PACF PLOTS
+```{r}
+par(mfrow = c(2,2))
+pacf(fit_auto_train_VAR2$residuals, main = 'Partial Corelogram')
+pacf(model_VAR2$residuals, main = 'Partial Corelogram')
+pacf(model1_VAR2$residuals, main = 'Partial Corelogram')
+pacf(model2_VAR2$residuals, main = 'Partial Corelogram')
+```
+NOTE: 
+1. Residuals are the difference between actaual and fitted values<br>
+2. These blue lines are signficance bounds<br>
+3. This graph shows us the autocorelations for insample forecast errors<br>
+4. Do not exceed these significance bounds for lags 1 to end
+
+2. Ljunx-Box Test to check the autocorelations of the residuals
+
+This test used to test the lack of fit of a time series model.<br>
+This test is applied to the residuals of the time series model<br>
+
+We reject the null hypothesis, if p value is less than 0.05. This test is generally done for ARIMA models
+
+#Ljunx-Box Test to check the autocorelations of the residuals
+```{r}
+Box.test(model_VAR2$residuals, lag =20, type = 'Ljung-Box')
+Box.test(model1_VAR2$residuals, lag =20, type = 'Ljung-Box')
+Box.test(model2_VAR2$residuals, lag =20, type = 'Ljung-Box')
+```
+
+OBSERVATIONS:<br>
+For above performed Ljunx-Box Test on model_VAR2,model1_VAR2 and model2_VAR2 output, we can say that p-value is less than significance level 0.05, then there is a statistical significance.<br>
+We conclude that there is a liitle evidence of non-zero auto-corelations in the insample forecast errors at lags 1 to 20.<br>
+So we rejects the null hypothesis. Hence, we conclude that there is serial auto corelation present between lags.
+
+***Validating The Model by testing the model performance with Holdout set ***
+
+Here, choosing RMSE as evaluation parameter. The lower RMSE indicates a more accurate forecast.
+
+Below, is the comparison of model. We are fitting the model to test set which is the holdout set. And checking the accuracy using RMSE(Root mean square error) evaluation parameter. 
+
+```{r}
+accuracy(forecast(fit_auto_train_VAR2), test1) ["Test set", "RMSE"]
+#o/p - 6.771375
+```
+
+```{r}
+accuracy(forecast(model1_VAR2), test.sta1) ["Test set", "RMSE"]
+#O/P - 4.442126
+```
+
+```{r}
+accuracy(forecast(model2_VAR2), test.sta1) ["Test set", "RMSE"]
+#o/p - 4.453695
+```
+
+```{r}
+accuracy(forecast(model_VAR2), test.sta1) ["Test set", "RMSE"]
+#O/P - 4.44153
+```
+
+NOTE:- Here, the RMSE value is less of ARIMA models compared to exponential model.<br>
+The minimum RMSE is of model1_VAR2. <br>
+The RMSE of auto arima models with seasonality and without seasonality have little difference. 
+
+***COMMENT ON BEST MODEL AND ITS PARAMETERS***
+We observed the best model to be ARIMA model i.e."model1_VAR2".
+
+```{r}
+summary(model1_VAR2)
+```
+
+Passing parameter order = (1,0,5) ,which means 
+
+p = 1,<br>
+d = 0<br>
+q = 5 <br>
+
+For the best model, 1 member of lag is used as a predictor. As we transformed the series to stationary so members of differences needed for stationarity is 0. 5 are the number of lagged forecasts errors used in the prediction equation.
+
+AIC = 11026.94, RMSE = 2.980804 which is minimum as compared to other models
+
+**3. Forecasting on Average T (T_AV)**
+
+#Checking the attributes of time series
+```{r}
+attributes(tsT_AV)
+```
+
+Plotting the series 
+```{r}
+plot(tsT_AV, main = "Average T observed for years (tsT_AV)", ylim = c(0,35), col = "red")
+```
+
+From the plot, we observes that there is no trend but seems to have seasonlity.<br>
+Most of the data is missing for year 2002 to 2003 .
+
+Checking the statistics and visualising the missing data in the series:
+```{r}
+plotNA.distribution(tsT_AV)
+```
+As we see there is a large gap in the missing data, so locf and NOCB would not seems the good technique to implement here. 
+
+Also, as no trend is being observed here, so not necessary to use "Kalman filter with arima state space model" as it works best for series having trend and seasonality.
+
+Hence, using "Linear interpolation" technique to impute missing values. This method works good for series having seasonality but no trend type of time series data.
+
+
+#Impute the missing values with "na_interpolation" function of "imputeTS package" and visualise the imputed values in the time series
+```{r}
+tsT_AV.imp <- na_interpolation(tsT_AV, method = "linear")
+plotNA.imputations(tsT_AV, tsT_AV.imp)
+```
+
+#Decomposition Of Time Series
+```{r}
+decomp2 <- decompose(tsT_AV.imp)
+plot(decomp2, col = "red")
+```
+
+**OBSERVATIONS:**<br>
+1)There seems to have trend and seasonality both<br>
+2)From 1998 to 2001 seems to have downward trend and from 2001 to 2005 seems to have upward trend.<br>
+3)We observe some seasonality in the series. Means there is some seasonality. Seasonality describes cyclical effects due to the time of the year.
+
+Let's explore this seasonality pattern by plotting the decomp$seasonal components such that y-axis represents Seasonality Index and x-axis has month
+
+#Visualising the seasonal data
+```{r}
+par(mfrow= c(1,2))
+plot(decomp2$seasonal, type ='b', xlab = 'Years', ylab = 'Seasonality Index', col = 'blue', las = 2, main = "SEASONAL DATA")
+plot(decomp2$seasonal[1:400], type ='b', xlab = 'Years', ylab = 'Seasonality Index', col = 'blue', las = 2, main = "SEASONAL DATA")
+```
+**OBSERVATIONS:**  <br>
+1) There is increase in the mid of months of a year.<br>
+2) There is a drop in peak T for starting and ending months of the year 
+
+#Stationarity check of time series <br>
+We could check the stationarity of time series by ADF and KPSS Tests:
+
+1. Augmented Dickey- Fuller(ADF) t-statistic test for unit root<br>
+2. Kwiatkowski-Phillips-Schmidt-Shin (KPSS) for level or trend stationarity
+
+```{r}
+adf.test(tsT_AV.imp)
+#p-value is less than 0.05, hence it is stationary
+kpss.test(tsT_AV.imp, null="Trend")
+#p-value is less than 0.05, hence it is not trend- stationary
+```
+NOTE: From the both tests results, it leads to CASE4, we could recheck by visualising it i.e. by plotting ACF. 
+Second, we can check each for characteristics of stationarity by looking at the autocorrelation functions (ACF) of each signal. For a stationary signal, because we expect no dependence with time, we would expect the ACF to go to 0 for each time lag (τ). Lets visualize the signals and ACFs.
+
+```{r}
+acf(tsT_AV.imp,lag.max = length(tsT_AV.imp),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+
+It seems difference of 1 is sufficient to make the series stationary.
+```{r}
+tsT_AV.sta <- diff(tsT_AV.imp, diff =1)
+acf(tsT_AV.sta, lag.max = length(tsT_AV.sta),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+Hence, after differencing our series is now transformed to stationary time series.
+
+#Visualising the stationary series
+
+```{r}
+plot(tsT_AV.sta, col = "red", main = "Stationary Series")
+```
+
+#CREATING MODELS AND FORECASTING: USING EXPONENTIAL SMOOTHING AND ARIMA TECHNIQUES FOR TIME SERIES FORECASTING
+
+1.Train - Test Split of the data
+```{r}
+train2 <- window(tsT_AV.imp, end = c(2004, 3))
+test2 <- window(tsT_AV.imp, start = c(2004, 4))
+```
+#Model 1 : Auto Exponential Smoothening Model
+```{r}
+set.seed(301)
+fit_auto_train_Var3 <- forecast(train2)
+summary(fit_auto_train_Var3)
+```
+##NOTE: AIC = 20992.54, BIC = 21009.62 , RMSE = 2.55584
+Also, the headline of the plot below contains ETS(A,N,N) showing that the automated model characterized error of the “tsWSR_PK” SERIES as Additative (A), trend as None (A) and seasonality as None (N) which is equivalent to simple exponential model(ses) with only alpha parameter i.e level.
+
+#Model 2 : ARIMA Model(AutoRegressive Moving Average) 
+
+#Changing to stationary set
+```{r}
+train.sta_Var3 <- diff(train2, diff = 1)
+test.sta_Var3 <- diff(test2, diff = 1)
+```
+
+#2.1 Auto Arima model without sesonality:
+```{r}
+set.seed(301)
+model_Var3 <- auto.arima(train.sta_Var3, seasonal = FALSE)
+summary(model_Var3)
+```
+##NOTE: AIC = 10347.3, BIC = 10375.76 , RMSE = 2.557022
+```{r}
+tsdisplay(residuals(model_Var3), lag.max = 45, main = '(1,1,1) Model Residuals')
+```
+#2.2 Auto Arima model with sesonality:
+```{r}
+set.seed(301)
+model2_Var3 <- auto.arima(train.sta_Var3, seasonal= TRUE)
+summary(model2_Var3)
+```
+##NOTE: AIC = 10349.78, BIC =10389.63 , RMSE = 2.556135 
+```{r}
+tsdisplay(residuals(model2_Var3), lag.max = 20, main = 'Seasonal Model Residuals')
+```
+NOTE: Above Graphs shows serious lags at 14.
+#2.3 Manual Arima
+```{r}
+set.seed(301)
+model1_Var3 <- arima(train.sta_Var3, order = c(2,0,14))
+summary(model1_Var3)
+```
+
+##NOTE: AIC = 10332.66, RMSE = 2.533326
+```{r}
+tsdisplay(residuals(model1_Var3), lag.max = 20, main = 'Seasonal Model Residuals')
+```
+
+***Fit the observed with the predicted values for both models in the same plot. ***
+
+```{r}
+par(mfrow = c(2,2))
+fit_auto_train_Var3 %>% forecast(h=341) %>% autoplot() 
+model1_Var3 %>% forecast(h=341) %>% autoplot() 
+model2_Var3 %>% forecast(h=341) %>% autoplot() 
+model_Var3 %>% forecast(h=341) %>% autoplot() 
+```
+
+COMMENT:<br>
+1. The plots includes 80% to 95% confidence interval.<br>
+2. For ARIMA models it plots the forecast but because of the nature of autoregressive process of  lag, these forecast stabilizes quite smoothly.<br>
+
+***Plot and comment on the residuals of the fitted data for both models in the same plot.***
+ 
+Residual Plot - to confirm no problem with this model
+
+```{r}
+par(mfrow= c(2,2))
+hist(fit_auto_train_Var3$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(fit_auto_train_Var3$residuals))
+
+hist(model_Var3$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model_Var3$residuals))
+
+hist(model1_Var3$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model1_Var3$residuals))
+
+hist(model2_Var3$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model2_Var3$residuals))
+```
+
+OBSERVATION: The residuals for each model are normally distributed, which shows the good fit of the models.
+It is normally distrbuted
+
+***Testing the autocorrelation and partial autocorrelation of the residuals (using the plots and Ljung-Box Q statistic*) up to an appropriate lag ***
+
+1. ACF & PACF Plots
+
+```{r}
+par(mfrow = c(4,2))
+acf(fit_auto_train_Var3$residuals, main = 'Correlogram')
+pacf(fit_auto_train_Var3$residuals, main = 'Partial Corelogram')
+
+acf(model_Var3$residuals, main = 'Correlogram')
+pacf(model_Var3$residuals, main = 'Partial Corelogram')
+
+acf(model1_Var3$residuals, main = 'Correlogram')
+pacf(model1_Var3$residuals, main = 'Partial Corelogram')
+
+acf(model2_Var3$residuals, main = 'Correlogram')
+pacf(model2_Var3$residuals, main = 'Partial Corelogram')
+```
+
+NOTE: 
+1. Residuals are the difference between actaual and fitted values
+2. These blue lines are signficance bounds
+3. This graph shows us the autocorelations for insample forecast errors
+4. Do not exceed these significance bounds for lags 1 to end
+
+2. Ljunx-Box Test to check the autocorelations of the residuals
+
+```{r}
+Box.test(model_Var3$residuals, lag =20, type = 'Ljung-Box')
+Box.test(model1_Var3$residuals, lag =20, type = 'Ljung-Box')
+Box.test(model2_Var3$residuals, lag =20, type = 'Ljung-Box')
+```
+OBSERVATIONS: For above performed Ljunx-Box Test on model_Var3,model1_Var3 and model2_Var3 output, we can say that p-value is more than significance level 0.05 for model1_Var3.<br>
+Hence there is not a statistical significance.<br>
+We conclude that there is a liitle evidence of non-zero auto-corelations in the insample forecast errors at lags 1 to 20 model1_Var3.<br>
+So we fail to rejects the null hypothesis. Hence, we conclude that there is no serial auto corelation present between lags. Hence, the model_Var3 seems to be good fit compared to other models.
+
+***Test and comment on the normality of the residuals. ***
+
+Here, further testing the normality by plotting Normal Q-Q plots. From below plots we observed that most of the datapoints lies on the line. Hence, we could conclude that our model produces residuals that are normal
+
+```{r}
+par(mfrow = c(2,2))
+qqnorm(fit_auto_train_Var3$residuals)
+qqnorm(model_Var3$residuals)
+qqnorm(model1_Var3$residuals)
+qqnorm(model2_Var3$residuals)
+```
+
+***Validating The Model by testing the model performance with Holdout set ***
+
+Here, choosing RMSE as evaluation parameter. The lower RMSE indicates a more accurate forecast.
+
+Below, is the comparison of model. We are fitting the model to test set which is the holdout set. And checking the accuracy using RMSE(Root mean square error) evaluation parameter. 
+
+```{r}
+accuracy(forecast(fit_auto_train_Var3), test2) ["Test set", "RMSE"]
+```
+#o/p - 6.973589
+```{r}
+accuracy(forecast(model1_Var3), test.sta_Var3) ["Test set", "RMSE"]
+```
+#O/P - 2.481816
+
+```{r}
+accuracy(forecast(model2_Var3), test.sta_Var3) ["Test set", "RMSE"]
+```
+#o/p - 2.479714
+
+```{r}
+accuracy(forecast(model_Var3), test.sta_Var3) ["Test set", "RMSE"]
+```
+#O/P - 2.479376
+
+NOTE:- Here, the RMSE value is less of ARIMA models compared to exponential model.<br>
+The minimum RMSE is of model_Var3. <br>
+
+***COMMENT ON BEST MODEL AND ITS PARAMETERS***
+
+We observed the best model to be ARIMA model i.e."model_Var3".
+
+```{r}
+summary(model_Var3)
+```
+
+Auto Arima Model(2,0,2) is the best model,which means 
+
+p = 2, <br>
+d = 0 <br>
+q = 2 <br>
+
+For the best model, 2 member of lag is used as a predictor. As we transformed the series to stationary so members of differences needed for stationarity is 0. 2 are the number of lagged forecasts errors used in the prediction equation. <br>
+AICc- Means AIC with correction is equaivalent to 10347.33.<br>
+AIC = 10347.33, RMSE = 2.557022 which is minimum as compared to other models.
+
+
+**4. Forecasting on T at 850 hpa level (or about 1500 m height) (T85)**
+
+#Checking the attributes of time series
+
+```{r}
+attributes(tsT85)
+```
+#Plotting the series 
+```{r}
+plot(tsT85, main = "T at 850 hpa level (or about 1500 m height)(tsT85)", col = "red")
+```
+From the plot, we observes that there is no trend but seems to have seasonlity.<br>
+By just looking, it doesnt seems that data is missing.
+
+Checking the statistics and visualising the missing data in the series:
+
+```{r}
+plotNA.distribution(tsT85)
+```
+NOTE: Here, Data is missing at random
+
+As we see the data is missing randomly, so locf and NOCB does seems the good technique to implement here. 
+
+#Impute the missing values with "na_locf" function of "imputeTS package" and visualise the imputed values in the time series
+
+```{r}
+tsT85.imp <- na_locf(tsT85)
+plotNA.imputations(tsT85, tsT85.imp)
+```
+
+#Decomposition Of Time Series
+```{r}
+decomp3 <- decompose(tsT85.imp)
+plot(decomp3, col = "red")
+```
+**OBSERVATIONS:**<br>
+1)There seems to have trend.<br>
+2)It seems to have downward trend.<br> 
+3)We observe some seasonality in the series. Seasonality describes cyclical effects due to the time of the year.
+
+Let's explore this seasonality pattern by plotting the decomp$seasonal components such that y-axis represents Seasonality Index and x-axis has month
+
+```{r}
+par(mfrow=c(1,2))
+plot(decomp3$seasonal, type ='b', xlab = 'Years', ylab = 'Seasonality Index', col = 'blue', las = 2, main = "SEASONAL DATA")
+plot(decomp3$seasonal[1:365], type ='b', xlab = 'Years', ylab = 'Seasonality Index', col = 'blue', las = 2, main = "SEASONAL DATA")
+```
+**OBSERVATIONS:**  <br>
+1) There is increase in the mid of months of a year.<br>
+2) There is a drop in peak T for starting and ending months of the year 
+
+#Stationarity check of time series <br>
+We could check the stationarity of time series by ADF and KPSS Tests:
+
+1. Augmented Dickey- Fuller(ADF) t-statistic test for unit root<br>
+2. Kwiatkowski-Phillips-Schmidt-Shin (KPSS) for level or trend stationarity
+
+```{r}
+adf.test(tsT85.imp)
+```
+NOTE: Here p-value is less, so the series is stationary
+```{r}
+kpss.test(tsT85.imp, null="Trend")
+```
+NOTE: Here p-value is less, so the series is not stationary
+
+Plotting ACF to check the auto-corelations 
+```{r}
+acf(tsT85.imp,lag.max = length(tsT85.imp),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+
+Here, we observes most of the data lies outside the blue-dotted lines means the significance level.<br>
+Now, we will take the difference to make our data stationary.
+
+It seems difference of 1 is sufficient to make the series stationary. 
+```{r}
+tsT85.sta <- diff(tsT85.imp)
+attributes(tsT85.sta)
+```
+Hence, after differencing our series is now transformed to stationary time series.
+
+#Visualising the stationary series
+```{r}
+acf(tsT85.sta, lag.max = length(tsT85.sta),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+
+#CREATING MODELS AND FORECASTING: USING EXPONENTIAL SMOOTHING AND ARIMA TECHNIQUES FOR TIME SERIES FORECASTING
+
+1.Train - Test Split of the data
+```{r}
+train3 <- window(tsT85.imp, end = c(2004, 3))
+test3 <- window(tsT85.imp, start = c(2004, 4))
+```
+#Model 1 : Auto Exponential Smoothening Model
+```{r}
+set.seed(301)
+fit_auto_train_Var4 <- forecast(train3)
+summary(fit_auto_train_Var4)
+```
+##NOTE: AIC = 20079.90 , BIC = 20096.98 , RMSE = 2.075702
+Also, the headline of the plot below contains ETS(A,N,N) showing that the automated model characterized error of the “tsWSR_PK” SERIES as Additative (A), trend as None (A) and seasonality as None (N) which is equivalent to simple exponential model(ses) with only alpha parameter i.e level.
+
+
+#Model 2 : ARIMA Models(AutoRegressive Moving Average) 
+It is used for forecasting for both seasonal and non- seasonal level.
+
+#Changing to stationary set
+```{r}
+train.sta_Var4 <- diff(train3)
+test.sta_Var4 <- diff(test3)
+```
+
+#2.1 Auto Arima model without sesonality:
+```{r}
+set.seed(301)
+model_Var4 <- auto.arima(train.sta_Var4, seasonal = FALSE)
+summary(model_Var4)
+```
+
+##NOTE: AIC = 9667.99 , BIC = 9696.46 , RMSE = 2.19006
+```{r}
+tsdisplay(residuals(model_Var4), lag.max = 45, main = '(1,1,1) Model Residuals')
+```
+
+#2.2 Auto Arima model with sesonality:
+```{r}
+set.seed(301)
+model2_Var4 <- auto.arima(train.sta_Var4, seasonal= TRUE)
+summary(model2_Var4)
+```
+
+##NOTE: AIC =9667.55, BIC = 9690.32, RMSE = 2.190842
+```{r}
+tsdisplay(residuals(model2_Var4), lag.max = 20, main = 'Seasonal Model Residuals')
+```
+
+NOTE: Above Graphs shows serious lags at 15
+
+#2.3 Manual Arima
+Passing parameter order = (2,0,15) which means p(member of lags of a variable to be used as a predictor) = 2,
+d = 0(members of differences needed for stationarity) and q = 15 (moving average order - number of lagged forecasts error in the prediction equation)
+
+```{r}
+set.seed(301)
+model1_Var4 <- arima(train.sta_Var4, order = c(2,0,15))
+summary(model1_Var4)
+```
+
+##NOTE: AIC = 9680.88 , RMSE = 2.182491
+```{r}
+tsdisplay(residuals(model1_Var4), lag.max = 20, main = 'Seasonal Model Residuals')
+```
+Note: It seems good fit.
+
+
+***Fit the observed with the predicted values for both models in the same plot. ***
+
+#Plotting forecast for each model
+```{r}
+par(mfrow = c(2,2))
+fit_auto_train_Var4 %>% forecast(h=341) %>% autoplot() 
+model1_Var4 %>% forecast(h=341) %>% autoplot() 
+model2_Var4 %>% forecast(h=341) %>% autoplot() 
+model_Var4 %>% forecast(h=341) %>% autoplot() 
+```
+
+***Plot and comment on the residuals of the fitted data for both models in the same plot.***
+ 
+Residual Plot - to confirm no problem with this model
+
+```{r}
+par(mfrow= c(2,2))
+hist(fit_auto_train_Var4$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(fit_auto_train_Var4$residuals))
+
+hist(model_Var4$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model_Var4$residuals))
+
+hist(model1_Var4$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model1_Var4$residuals))
+
+hist(model2_Var4$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model2_Var4$residuals))
+```
+OBSERVATION: The residuals for each model are normally distributed, which shows the good fit of the models.
+It is normally distributed
+
+***Testing the autocorrelation and partial autocorrelation of the residuals (using the plots and Ljung-Box Q statistic*) up to an appropriate lag ***
+
+1. ACF & PACF Plots
+```{r}
+par(mfrow = c(4,2))
+acf(fit_auto_train_Var4$residuals, main = 'Correlogram')
+pacf(fit_auto_train_Var4$residuals, main = 'Partial Corelogram')
+
+acf(model_Var4$residuals, main = 'Correlogram')
+pacf(model_Var4$residuals, main = 'Partial Corelogram')
+
+acf(model1_Var4$residuals, main = 'Correlogram')
+pacf(model1_Var4$residuals, main = 'Partial Corelogram')
+
+acf(model2_Var4$residuals, main = 'Correlogram')
+pacf(model2_Var4$residuals, main = 'Partial Corelogram')
+```
+
+NOTE: <br>
+1. Residuals are the difference between actaual and fitted values<br>
+2. These blue lines are signficance bounds<br>
+3. This graph shows us the autocorelations for insample forecast errors<br>
+4. Do not exceed these significance bounds for lags 1 to end<br>
+
+#Ljunx-Box Test to check the autocorelations of the residuals
+
+HO: No serial correlation upto 20 lags (does not exhibit lack of fit of the model)<br>
+Ha: Serial corelation is present (the model exhibits lack of fit)
+
+We reject the null hypothesis, if p value is less than 0.05. This test is generally done for ARIMA models
+
+```{r}
+Box.test(model_Var4$residuals, lag =20, type = 'Ljung-Box')
+Box.test(model1_Var4$residuals, lag =20, type = 'Ljung-Box')
+Box.test(model2_Var4$residuals, lag =20, type = 'Ljung-Box')
+```
+OBSERVATIONS:<br>
+For above performed Ljunx-Box Test on all ARIMA models output, we can say that p-value is more than significance level 0.05, then there is not a statistical significance.<br>
+We conclude that there is a liitle evidence of non-zero auto-corelations in the insample forecast errors at lags 1 to 20.<br>
+So we fail to rejects the null hypothesis. Hence, we conclude that there is no serial auto corelation present between lags. Hence, the model seems to be good fit.<br>
+
+***Test and comment on the normality of the residuals. ***
+
+Here, further testing the normality by plotting Normal Q-Q plots. From below plots we observed that most of the datapoints lies on the line. Hence, we could conclude that our model produces residuals that are normal
+
+```{r}
+par(mfrow = c(2,2))
+qqnorm(fit_auto_train_Var4$residuals)
+qqnorm(model_Var4$residuals)
+qqnorm(model1_Var4$residuals)
+qqnorm(model2_Var4$residuals)
+```
+
+***Validating The Model by testing the model performance with Holdout set ***
+
+Here, choosing RMSE as evaluation parameter. The lower RMSE indicates a more accurate forecast.
+
+Below, is the comparison of model. We are fitting the model to test set which is the holdout set. And checking the accuracy using RMSE(Root mean square error) evaluation parameter. 
+
+```{r}
+accuracy(forecast(fit_auto_train_Var4), test3) ["Test set", "RMSE"]
+#o/p - 4.297961
+```
+
+```{r}
+accuracy(forecast(model1_Var4), test.sta_Var4) ["Test set", "RMSE"]
+#O/P - 2.202662
+```
+
+```{r}
+accuracy(forecast(model2_Var4), test.sta_Var4) ["Test set", "RMSE"]
+#o/p - 2.203002
+```
+
+```{r}
+accuracy(forecast(model_Var4), test.sta_Var4) ["Test set", "RMSE"]
+#O/P - 2.202313
+```
+
+NOTE:- Here, the RMSE value is less of ARIMA models compared to exponential model.<br>
+The minimum RMSE is of model_Var4. <br>
+
+
+***COMMENT ON BEST MODEL AND ITS PARAMETERS***
+
+We observed the best model to be ARIMA model i.e."model_Var4.".
+
+```{r}
+summary(model_Var4)
+```
+
+Passing parameter order = (1,0,3) ,which means <br>
+
+p = 1,<br>
+d = 0<br>
+q = 3<br>
+
+For the best model, 1 member of lag is used as a predictor. As we transformed the series to stationary so members of differences needed for stationarity is 0. 3 are the number of lagged forecasts errors used in the prediction equation.<br>
+AIC = 9667.99, RMSE = 2.19006 which is minimum as compared to other models.
+
+**5. Forecasting on Relative Humidity at 850 hpa (RH85)**
+
+#Checking the attributes of time series
+```{r}
+attributes(tsRH85)
+```
+#Plotting the series 
+```{r}
+plot(tsRH85, main = " Relative Humidity at 850 hpa (tsRH85)", col = "blue")
+```
+From the plot, we observes that there seems to have is no trend but seems to have seasonality.
+
+Checking the statistics and visualising the missing data in the series:
+
+#To check the missing data
+```{r}
+plotNA.distribution(tsRH85)
+#data is missing at random 
+```
+Here, data is missing at random.
+
+#Impute the missing values with "na_locf" function of "imputeTS package" and visualise the imputed values in the time series
+```{r}
+tsRH85.imp <- na_locf(tsRH85)
+plotNA.imputations(tsRH85, tsRH85.imp)
+```
+
+#Decomposition Of Time Series
+```{r}
+decomp4 <- decompose(tsRH85.imp)
+plot(decomp4, col = "red")
+```
+
+**OBSERVATIONS:**<br>
+1)There seems to have trend.
+2)We observes slighty upward trend from year 2000 onwards.<br>
+3)We observe some seasonality in the series. Seasonality describes cyclical effects due to the time of the year.
+
+Let's explore this seasonality pattern by plotting the decomp$seasonal components such that y-axis represents Seasonality Index and x-axis has month
+
+#Plotting the decomposed series
+```{r}
+par(mfrow = c(1,1))
+plot(decomp4$seasonal[1:365], type ='b', xlab = 'Years', ylab = 'Seasonality Index', col = 'blue', las = 2, main = "SEASONAL DATA")
+```
+
+# Stationarity check of time series 
+We could check the stationarity of time series by ADF and KPSS Tests:
+
+1. Augmented Dickey- Fuller(ADF) t-statistic test for unit root<br>
+2. Kwiatkowski-Phillips-Schmidt-Shin (KPSS) for level or trend stationarity<br>
+
+```{r}
+adf.test(tsRH85.imp)
+```
+NOTE: smaller p-value, hence the series is stationary
+
+```{r}
+kpss.test(tsRH85.imp, null="Trend")
+```
+
+NOTE: p-value is greater, hence the series is stationary
+```{r}
+acf(tsRH85.imp,lag.max = length(tsRH85.imp),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+
+NOTE: From the both tests results, it is confirmed that the series is stationary
+
+#CREATING MODELS AND FORECASTING: USING EXPONENTIAL SMOOTHING AND ARIMA TECHNIQUES FOR TIME SERIES FORECASTING
+
+
+#TRAIN- TEST SET SPLIT
+```{r}
+train4 <- window(tsRH85.imp, end = c(2004, 3))
+test4 <- window(tsRH85.imp, start = c(2004, 4))
+```
+
+#Model 1 : Auto Exponential Smoothening Model
+```{r}
+set.seed(301)
+fit_auto_train_Var5 <- forecast(train4)
+summary(fit_auto_train_Var5)
+```
+
+##NOTE: AIC = 10212.74, BIC = 10229.82 , RMSE = 0.2188444
+Also, the headline of the plot below contains ETS(A,N,N) showing that the automated model characterized error of the “tsWSR_PK” SERIES as Additative (A), trend as None (A) and seasonality as None (N) which is equivalent to simple exponential model(ses) with only alpha parameter i.e level.
+
+#Model 2 : ARIMA Model
+
+#2.1 Auto Arima model without sesonality:
+
+```{r}
+set.seed(301)
+model_Var5 <- auto.arima(train4, seasonal = FALSE)
+summary(model_Var5)
+```
+
+##NOTE: AIC = -230.07 , BIC = -195.91 , RMSE = 0.2289515
+```{r}
+tsdisplay(residuals(model_Var5), lag.max = 45, main = '(1,1,1) Model Residuals')
+```
+#2.2 Auto Arima model with sesonality:
+```{r}
+set.seed(301)
+model2_Var5 <- auto.arima(train4, seasonal= TRUE)
+summary(model2_Var5)
+```
+##NOTE: AIC = -228.69 , BIC = -177.46 , RMSE = 0.2287086
+```{r}
+tsdisplay(residuals(model2_Var5), lag.max = 20, main = 'Seasonal Model Residuals')
+```
+
+NOTE: Above Graphs does not shows serious lags 
+
+#Plotting forecast for each model
+```{r}
+par(mfrow = c(2,2))
+fit_auto_train_Var5 %>% forecast(h=341) %>% autoplot() 
+model2_Var5 %>% forecast(h=341) %>% autoplot() 
+model_Var5 %>% forecast(h=341) %>% autoplot() 
+```
+***Plot and comment on the residuals of the fitted data for both models in the same plot.***
+ 
+Residual Plot - to confirm no problem with this model
+
+```{r}
+par(mfrow= c(2,2))
+hist(fit_auto_train_Var5$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(fit_auto_train_Var5$residuals))
+
+hist(model_Var5$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model_Var5$residuals))
+
+hist(model2_Var5$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model2_Var5$residuals))
+```
+OBSERVATION:<br>
+The residuals for each model are normally distributed, which shows the good fit of the models.
+It is normally distrbuted
+
+***Testing the autocorrelation and partial autocorrelation of the residuals (using the plots and Ljung-Box Q statistic*) up to an appropriate lag ***
+
+1. ACF & PACF Plots
+```{r}
+par(mfrow = c(3,2))
+acf(fit_auto_train_Var5$residuals, main = 'Correlogram')
+pacf(fit_auto_train_Var5$residuals, main = 'Partial Corelogram')
+
+acf(model_Var5$residuals, main = 'Correlogram')
+pacf(model_Var5$residuals, main = 'Partial Corelogram')
+
+acf(model2_Var5$residuals, main = 'Correlogram')
+pacf(model2_Var5$residuals, main = 'Partial Corelogram')
+```
+NOTE: <br>
+1. Residuals are the difference between actaual and fitted values<br>
+2. These blue lines are signficance bounds<br>
+3. This graph shows us the autocorelations for insample forecast errors<br>
+4. Do not exceed these significance bounds for lags 1 to end<br>
+
+#Ljunx-Box Test to check the autocorelations of the residuals
+
+HO: No serial correlation upto 20 lags (does not exhibit lack of fit of the model)<br>
+Ha: Serial corelation is present (the model exhibits lack of fit)
+
+We reject the null hypothesis, if p value is less than 0.05. This test is generally done for ARIMA models
+
+```{r}
+Box.test(model_Var5$residuals, lag =20, type = 'Ljung-Box')
+Box.test(model2_Var5$residuals, lag =20, type = 'Ljung-Box')
+```
+OBSERVATIONS: For above performed Ljunx-Box Test on both arima models, we can say that p-value is more than significance level 0.05, then there is not a statistical significance.<br>
+We conclude that there is a liitle evidence of non-zero auto-corelations in the insample forecast errors at lags 1 to 20.<br>
+So we fail to rejects the null hypothesis. Hence, we conclude that there is no serial auto corelation present between lags. Hence, both model seems to be good fit.<br>
+
+***Validating The Model by testing the model performance with Holdout set ***
+
+Here, choosing RMSE as evaluation parameter. The lower RMSE indicates a more accurate forecast.
+
+Below, is the comparison of model. We are fitting the model to test set which is the holdout set. And checking the accuracy using RMSE(Root mean square error) evaluation parameter. 
+
+```{r}
+accuracy(forecast(fit_auto_train_Var5), test4) ["Test set", "RMSE"]
+#o/p - 0.2604829
+```
+
+```{r}
+accuracy(forecast(model2_Var5), test4) ["Test set", "RMSE"]
+#o/p - 0.248869
+```
+
+```{r}
+accuracy(forecast(model_Var5), test4) ["Test set", "RMSE"]
+#O/P - 0.2489681
+```
+NOTE:- <br>
+Here, the RMSE value is less of ARIMA models compared to exponential model.<br>
+The minimum RMSE is of model2_Var5. <br>
+
+***COMMENT ON BEST MODEL AND ITS PARAMETERS***
+
+We observed the best model to be ARIMA model i.e."model2_Var5".
+
+```{r}
+summary(model2_Var5)
+```
+
+Best Model is ARIMA (5,0,2) ,which means 
+
+p = 5<br>
+d = 0<br>
+q = 2<br> 
+
+For the best model, 5 members of lag are used as a predictor. <br>
+As the series was stationary so members of differences needed for stationarity is 0.<br>
+2 are the number of lagged forecasts errors used in the prediction equation.<br>
+
+AIC = 6173.8, RMSE = 0.9795425 which is minimum as compared to other models.
+
+
+**6. Forecasting on Geopotential height at 850 hpa, it is about the same as height at low altitude (HT85) **
+
+#Checking the attributes of time series
+
+```{r}
+attributes(tsHT85)
+```
+#Plotting the series 
+```{r}
+plot(tsHT85, main = "Geopotential height at 850 hpa (tsHT85)", col = "orange")
+```
+From the plot, we observes that there seems slight upward trend also seems to have seasonlity.<br>
+
+Checking the statistics and visualising the missing data in the series:
+
+```{r}
+plotNA.distribution(tsHT85)
+```
+#data is missing at random <br>
+As we see here data is missing randomly, so locf and NOCB would seems the good technique to implement here. 
+
+#Impute the missing values with "na_locf" function of "imputeTS package" and visualise the imputed values in the time series<br>
+```{r}
+tsHT85.imp <- na_locf(tsHT85)
+plotNA.imputations(tsHT85, tsHT85.imp)
+```
+
+#Decomposition Of Time Series
+```{r}
+decomp5 <- decompose(tsHT85.imp)
+plot(decomp5, col = "red")
+```
+**OBSERVATIONS:**<br>
+1)There seems to have trend.<br>
+2) It seems to have upward trend from 1998 to around year 2000 and from year 2003 to 2005.<br>
+3) Also, observes downward trend from year 2000 to 2003.<br>
+4) We observe some seasonality in the series. Seasonality describes cyclical effects due to the time of the year.
+
+Let's explore this seasonality pattern by plotting the decomp$seasonal components such that y-axis represents Seasonality Index and x-axis has month
+
+#Plotting the decomposed series
+```{r}
+plot(decomp5$seasonal[1:365], type ='b', xlab = 'Years', ylab = 'Seasonality Index', col = 'blue', las = 2, main = "SEASONAL DATA")
+```
+**OBSERVATIONS:**  <br>
+There is increase in the height in mid of the year and a drop in height for starting and end months of a year and we could think the reason because of seasonal change.
+
+# Stationarity check of time series 
+
+We could check the stationarity of time series by ADF and KPSS Tests:
+
+1. Augmented Dickey- Fuller(ADF) t-statistic test for unit root <br>
+2. Kwiatkowski-Phillips-Schmidt-Shin (KPSS) for level or trend stationarity <br>
+
+```{r}
+adf.test(tsHT85.imp)
+#smaller p-value, it is stationary 
+```
+
+```{r}
+kpss.test(tsHT85.imp, null="Trend")
+#smaller p-value, hence not stationary
+```
+NOTE: From the both tests results, it leads to CASE4, we could recheck by visualising it i.e. by plotting ACF. 
+Second, we can check each for characteristics of stationarity by looking at the autocorrelation functions (ACF) of each signal. For a stationary signal, because we expect no dependence with time, we would expect the ACF to go to 0 for each time lag (τ). Lets visualize the signals and ACFs.
+
+```{r}
+acf(tsHT85.imp,lag.max = length(tsHT85.imp),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+NOTE: There are significant lags which lies outside the significance bound. Hence, series is not stationary.<br>
+Now, we will take the difference to make our data stationary.
+
+It seems difference of 1 is sufficient to make the series stationary. 
+```{r}
+tsHT85.sta <- diff(tsHT85.imp, diff = 1)
+acf(tsHT85.sta, lag.max = length(tsHT85.sta),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+Hence, after differencing our series is now transformed to stationary time series.
+
+#Visualising the stationary series
+```{r}
+plot(tsHT85.sta, col = "red")
+```
+
+#CREATING MODELS AND FORECASTING: USING EXPONENTIAL SMOOTHING AND ARIMA TECHNIQUES FOR TIME SERIES FORECASTING
+
+1.Train - Test Split of the data
+```{r}
+train5 <- window(tsHT85.imp, end = c(2004, 3))
+test5 <- window(tsHT85.imp, start = c(2004, 4))
+```
+#Model 1 : Auto Exponential Smoothening Model
+```{r}
+set.seed(301)
+fit_auto_train_Var6 <- forecast(train5)
+summary(fit_auto_train_Var6)
+```
+##NOTE: AIC = 30316.22 , BIC = 30333.30, RMSE = 21.41649
+Also, the headline of the plot below contains ETS(A,N,N) showing that the automated model characterized error of the “tsWSR_PK” SERIES as Additative (A), trend as None (A) and seasonality as None (N) which is equivalent to simple exponential model(ses) with only alpha parameter i.e level.
+
+#Model 2 : ARIMA Model
+It is used for forecasting for both seasonal and non- seasonal level.
+
+#Changing to stationary set
+```{r}
+train.sta_Var6 <- diff(train5, diff = 1)
+test.sta_Var6 <- diff(test5, diff = 1)
+```
+
+#2.1 Auto Arima model without sesonality:
+```{r}
+set.seed(301)
+model_Var6 <- auto.arima(train.sta_Var6, seasonal = FALSE)
+summary(model_Var6)
+```
+##NOTE: AIC = 19604.82 , BIC = 19638.98, RMSE = 21.11353
+```{r}
+tsdisplay(residuals(model_Var6), lag.max = 45, main = '(1,1,1) Model Residuals')
+```
+#2.2 Auto Arima model with sesonality:
+```{r}
+set.seed(301)
+model2_Var6 <- auto.arima(train.sta_Var6, seasonal= TRUE)
+summary(model2_Var6)
+```
+##NOTE: AIC = 19610.11 , BIC = 19667.03, RMSE = 21.10002 
+```{r}
+tsdisplay(residuals(model2_Var6), lag.max = 20, main = 'Seasonal Model Residuals')
+```
+NOTE: Above Graphs shows no serious lags.
+
+#Plotting forecast for each model
+```{r}
+fit_auto_train_Var6 %>% forecast(h=341) %>% autoplot() 
+model2_Var6 %>% forecast(h=341) %>% autoplot() 
+model_Var6 %>% forecast(h=341) %>% autoplot() 
+```
+COMMENT:<br>
+1. The plots includes 80% to 95% confidence interval.<br>
+2. For ARIMA models it plots the forecast but because of the nature of autoregressive process of 1 lag i.e. AR1, these forecast stabilizes quite smoothly.<br>
+
+
+***Plot and comment on the residuals of the fitted data for both models in the same plot.***
+ 
+Residual Plot - to confirm no problem with this model
+
+```{r}
+par(mfrow=c(1,3))
+hist(fit_auto_train_Var6$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(fit_auto_train_Var6$residuals))
+
+hist(model_Var6$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model_Var6$residuals))
+
+hist(model2_Var6$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model2_Var6$residuals))
+```
+OBSERVATION: The residuals for each model are normally distributed, which shows the good fit of the models.
+It is normally distrbuted.
+
+***Testing the autocorrelation and partial autocorrelation of the residuals (using the plots and Ljung-Box Q statistic*) up to an appropriate lag ***
+
+1. ACF & PACF Plots
+
+```{r}
+par(mfrow = c(3,2))
+acf(fit_auto_train_Var6$residuals, main = 'Correlogram')
+pacf(fit_auto_train_Var6$residuals, main = 'Partial Corelogram')
+
+acf(model_Var6$residuals, main = 'Correlogram')
+pacf(model_Var6$residuals, main = 'Partial Corelogram')
+
+acf(model2_Var6$residuals, main = 'Correlogram')
+pacf(model2_Var6$residuals, main = 'Partial Corelogram')
+```
+
+NOTE: <br>
+1. Residuals are the difference between actaual and fitted values<br>
+2. These blue lines are signficance bounds<br>
+3. This graph shows us the autocorelations for insample forecast errors<br>
+4. Do not exceed these significance bounds for lags 1 to end<br>
+
+
+2. Ljunx-Box Test to check the autocorelations of the residuals
+
+HO: No serial correlation upto 20 lags (does not exhibit lack of fit of the model)<br>
+Ha: Serial corelation is present (the model exhibits lack of fit)
+
+We reject the null hypothesis, if p value is less than 0.05. This test is generally done for ARIMA models
+
+```{r}
+Box.test(model_Var6$residuals, lag =20, type = 'Ljung-Box')
+Box.test(model2_Var6$residuals, lag =20, type = 'Ljung-Box')
+```
+
+OBSERVATIONS: For above performed Ljunx-Box Test on both the ARIMA models output, we can say that p-value is more than significance level 0.05, then there is not a statistical significance.<br>
+We conclude that there is a little evidence of non-zero auto-corelations in the insample forecast errors at lags 1 to 20.<br>
+So we fail to rejects the null hypothesis. Hence, we conclude that there is no serial auto corelation present between lags. Hence, the model seems to be good fit.
+
+***Test and comment on the normality of the residuals. ***
+
+Here, further testing the normality by plotting Normal Q-Q plots. From below plots we observed that most of the datapoints lies on the line. Hence, we could conclude that our model produces residuals that are normal
+
+```{r}
+par(mfrow = c(2,2))
+qqnorm(fit_auto_train_Var6$residuals)
+qqnorm(model_Var6$residuals)
+qqnorm(model2_Var6$residuals)
+```
+
+***Validating The Model by testing the model performance with Holdout set ***
+
+Here, choosing RMSE as evaluation parameter. The lower RMSE indicates a more accurate forecast.
+
+Below, is the comparison of model. We are fitting the model to test set which is the holdout set. And checking the accuracy using RMSE(Root mean square error) evaluation parameter. 
+
+```{r}
+accuracy(forecast(fit_auto_train_Var6), test5) ["Test set", "RMSE"]
+```
+#o/p - 103.0419
+```{r}
+accuracy(forecast(model2_Var6), test.sta_Var6) ["Test set", "RMSE"]
+```		
+#o/p -23.82281
+
+```{r}
+accuracy(forecast(model_Var6), test.sta_Var6) ["Test set", "RMSE"]
+```
+#O/P - 23.86577
+
+NOTE:- Here, the RMSE value is less of ARIMA models compared to exponential model.<br>
+The minimum RMSE is of model2_Var6 <br>
+
+
+***COMMENT ON BEST MODEL AND ITS PARAMETERS***
+
+We observed the best model to be ARIMA model i.e."model2_Var6".
+
+```{r}
+summary(model2_Var6)
+```
+
+Passing parameter order = (5,0,3) ,which means <br>
+
+p = 5 <br>
+d = 0 <br>
+q = 3 <br.
+
+For the best model, 5 member of lag is used as a predictor. As we transformed the series to stationary so members of differences needed for stationarity is 0. 3 are the number of lagged forecasts errors used in the prediction equation.<br>
+AIC = 19610.11, RMSE = 21.10002 which is minimum as compared to other models.
+
+***7. Forecasting on T at 700 hpa level (roughly 3100 m height) ***
+
+#Checking the attributes of time series
+```{r}
+attributes(tsT70)
+```
+#Plotting the series 
+```{r}
+plot(tsT70, main = "T at 700 hpa level (roughly 3100 m height)(tsT70)", col = "red")
+```
+
+From the plot, we observes that there seems to be no  trend but seems to have seasonlity.<br>
+
+Checking the statistics and visualising the missing data in the series:
+
+```{r}
+#Visualizing the series with missing data
+plotNA.distribution(tsT70)
+```
+
+As we see the data is missing randomly, so locf and NOCB seems the good technique to implement here. 
+
+#Impute the missing values with "na_locf" function of "imputeTS package" and visualise the imputed values in the time series
+
+```{r}
+tsT70.imp <- na_locf(tsT70)
+plotNA.imputations(tsT70, tsT70.imp)
+```
+
+#Decomposition Of Time Series
+```{r}
+decomp6 <- decompose(tsT70.imp)
+plot(decomp6, col = "red")
+```
+**OBSERVATIONS:**<br>
+1)There does seems to have trend.<br>
+2) We observe the downward trend from year 1999 to 2002.<br>
+2)We observe some seasonality in the series. Seasonality describes cyclical effects due to the time of the year.
+
+Let's explore this seasonality pattern by plotting the decomp$seasonal components such that y-axis represents Seasonality Index and x-axis has month
+
+```{r}
+plot(decomp6$seasonal[1:365], type ='b', xlab = 'Years', ylab = 'Seasonality Index', col = 'blue', las = 2, main = "SEASONAL DATA")
+```
+**OBSERVATIONS:**  <br>
+1) There is increase in T for mid month of the year<br>
+2) There is a huge drop of T for starting and end months of the year 
+
+
+#Stationarity check of time series 
+
+We could check the stationarity of time series by ADF and KPSS Tests:
+
+1. Augmented Dickey- Fuller(ADF) t-statistic test for unit root <br>
+2. Kwiatkowski-Phillips-Schmidt-Shin (KPSS) for level or trend stationarity
+
+```{r}
+adf.test(tsT70.imp)
+```
+##p values is small, hence it is stationary
+```{r}
+kpss.test(tsT70.imp, null="Trend")
+```
+##p - value is smaller than 0.05, hence it is not stationary
+
+NOTE: From the both tests results, it leads to CASE4, we could recheck by visualising it i.e. by plotting ACF. 
+Second, we can check each for characteristics of stationarity by looking at the autocorrelation functions (ACF) of each signal. For a stationary signal, because we expect no dependence with time, we would expect the ACF to go to 0 for each time lag (τ). Lets visualize the signals and ACFs.
+
+Plotting ACF to check the auto-corelations 
+
+#Autocorelation plot 
+```{r}
+acf(tsT70.imp,lag.max = length(tsT70.imp),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+
+Here, we observes most of the data lies outside the blue-dotted lines means the significance level.
+Now, we will take the difference to make our data stationary.
+
+It seems difference of 1 is sufficient to make the series stationary. 
+```{r}
+tsT70.sta <- diff(tsT70.imp)
+acf(tsT70.sta, lag.max = length(tsT70.sta),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+Hence, after differencing our series is now transformed to stationary time series.
+
+#Visualising the stationary series
+```{r}
+plot(tsT70.sta, col = "red")
+```
+#CREATING MODELS AND FORECASTING: USING EXPONENTIAL SMOOTHING AND ARIMA TECHNIQUES FOR TIME SERIES FORECASTING
+
+
+1. TRAIN- TEST SET SPLIT
+```{r}
+train6 <- window(tsT70.imp, end = c(2004, 3))
+test6 <- window(tsT70.imp, start = c(2004, 4))
+```
+
+#Model 1 : Auto Exponential Smoothening Model
+```{r}
+set.seed(301)
+fit_auto_train_Var7 <- forecast(train6)
+summary(fit_auto_train_Var7)
+```
+##NOTE: AIC = 19695.46  , BIC = 19712.54 , RMSE = 1.901511 
+
+Also, the headline of the plot below contains ETS(A,N,N) showing that the automated model characterized error of the “tsWSR_PK” SERIES as Additative (A), trend as None (A) and seasonality as None (N) which is equivalent to simple exponential model(ses) with only alpha parameter i.e level.
+
+#Model 2 : ARIMA Model<br>
+It is used for forecasting for both seasonal and non- seasonal level.
+
+#Changing to stationary set
+```{r}
+train.sta_Var7 <- diff(train6)
+test.sta_Var7 <- diff(test6)
+```
+
+#2.1 Auto Arima model without sesonality:
+```{r}
+set.seed(301)
+model_Var7 <- auto.arima(train.sta_Var7, seasonal = FALSE)
+summary(model_Var7)
+```
+##AIC = 9309.05   , BIC = 9331.82, RMSE = 2.018759
+```{r}
+tsdisplay(residuals(model_Var7), lag.max = 45, main = '(1,1,1) Model Residuals')
+```
+
+#2.2 Auto Arima model with sesonality:
+```{r}
+set.seed(301)
+model2_Var7 <- auto.arima(train.sta_Var7, seasonal= TRUE)
+summary(model2_Var7)
+```
+##AIC = 9312.26  , BIC = 9346.42, RMSE = 2.018396
+```{r}
+tsdisplay(residuals(model2_Var7), lag.max = 40, main = 'Seasonal Model Residuals')
+```
+NOTE: Above Graphs does not shows serious lags.
+
+***Fit the observed with the predicted values for both models in the same plot. ***
+
+```{r}
+par(mfrow = c(2,2))
+fit_auto_train_Var7 %>% forecast(h=341) %>% autoplot() 
+model2_Var7 %>% forecast(h=341) %>% autoplot() 
+model_Var7 %>% forecast(h=341) %>% autoplot() 
+```
+***Plot and comment on the residuals of the fitted data for both models in the same plot.***
+ 
+Residual Plot - to confirm no problem with this model
+
+```{r}
+par(mfrow= c(3,2))
+hist(fit_auto_train_Var7$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(fit_auto_train_Var7$residuals))
+
+hist(model_Var7$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model_Var7$residuals))
+
+hist(model2_Var7$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model2_Var7$residuals))
+```
+OBSERVATION: The residuals for each model are normally distributed, which shows the good fit of the models.
+It is normally distrbuted. 
+
+***Testing the autocorrelation and partial autocorrelation of the residuals (using the plots and Ljung-Box Q statistic*) up to an appropriate lag ***
+
+
+#ACF PLOTS & PACF PLOTS
+```{r}
+par(mfrow = c(3,2))
+acf(fit_auto_train_Var7$residuals, main = 'Correlogram')
+pacf(fit_auto_train_Var7$residuals, main = 'Partial Corelogram')
+
+acf(model_Var7$residuals, main = 'Correlogram')
+pacf(model_Var7$residuals, main = 'Partial Corelogram')
+
+acf(model2_Var7$residuals, main = 'Correlogram')
+pacf(model2_Var7$residuals, main = 'Partial Corelogram')
+```
+NOTE:<br> 
+1. Residuals are the difference between actaual and fitted values<br>
+2. These blue lines are signficance bounds<br>
+3. This graph shows us the autocorelations for insample forecast errors<br>.
+4. Do not exceed these significance bounds for lags 1 to end <br>
+
+2. Ljunx-Box Test to check the autocorelations of the residuals
+
+HO: No serial correlation upto 20 lags (does not exhibit lack of fit of the model)<br>
+Ha: Serial corelation is present (the model exhibits lack of fit)
+
+We reject the null hypothesis, if p value is less than 0.05. This test is generally done for ARIMA models
+
+```{r}
+Box.test(model_Var7$residuals, lag =20, type = 'Ljung-Box')
+Box.test(model2_Var7$residuals, lag =20, type = 'Ljung-Box')
+```
+
+OBSERVATIONS: <br>
+For above performed Ljunx-Box Test on models, there is little statistical significance.
+We conclude that there is a liitle evidence of non-zero auto-corelations in the insample forecast errors at lags 1 to 20.
+
+***Test and comment on the normality of the residuals. ***
+
+Here, further testing the normality by plotting Normal Q-Q plots. From below plots we observed that most of the datapoints lies on the line. Hence, we could conclude that our model produces residuals that are normal
+
+```{r}
+par(mfrow = c(2,2))
+qqnorm(fit_auto_train_Var7$residuals)
+qqnorm(model_Var7$residuals)
+qqnorm(model2_Var7$residuals)
+```
+
+***Validating The Model by testing the model performance with Holdout set ***
+
+Here, choosing RMSE as evaluation parameter. The lower RMSE indicates a more accurate forecast.
+
+Below, is the comparison of model. We are fitting the model to test set which is the holdout set. And checking the accuracy using RMSE(Root mean square error) evaluation parameter. 
+
+```{r}
+accuracy(forecast(fit_auto_train_Var7), test6) ["Test set", "RMSE"]
+```
+#o/p - 2.870951
+```{r}
+accuracy(forecast(model2_Var7), test.sta_Var7) ["Test set", "RMSE"]
+```
+#o/p -2.00263
+```{r}
+accuracy(forecast(model_Var7), test.sta_Var7) ["Test set", "RMSE"]
+```
+#O/P - 2.002481
+
+NOTE:- Here, the RMSE value is less of ARIMA models compared to exponential model.<br>
+The minimum RMSE is of model_Var7 <br>
+
+***COMMENT ON BEST MODEL AND ITS PARAMETERS***
+
+We observed the best model to be ARIMA model i.e."model_Var7".
+
+```{r}
+summary(model_Var7)
+```
+
+Passing parameter order = (1,0,2) ,which means 
+
+p = 1,
+d = 0
+q = 2 
+
+For the best model, 1 member of lag is used as a predictor. As we transformed the series to stationary so members of differences needed for stationarity is 0. 2 are the number of lagged forecasts errors used in the prediction equation.
+AIC = 9309.07, RMSE = 2.018759 which is minimum as compared to other models.
+
+
+**8. Forecasting on K-Index (KI)**
+
+#Checking the attributes of time series
+
+```{r}
+attributes(tsKI)
+```
+#Plotting the series 
+
+```{r}
+plot(tsKI, main = "Average T observed for years (tsKI)", col = "red")
+```
+
+From the plot, we observes that there is no trend but seems to have seasonlity.<br>
+
+Checking the statistics and visualising the missing data in the series:
+```{r}
+plotNA.distribution(tsKI)
+```   
+Here, data is missing at random.
+
+#Impute the missing values with "na_interpolation" function of "imputeTS package" and visualise the imputed values in the time series
+```{r}
+tsKI.imp <- na_interpolation(tsKI, method = "linear")
+plotNA.imputations(tsKI, tsKI.imp)
+```
+#Decomposition Of Time Series
+```{r}
+decomp7 <- decompose(tsKI.imp)
+plot(decomp7, col = "red")
+```
+**OBSERVATIONS:**<br>
+1)There does seems to have trend.<br>
+2)We observes the downward trend from year 1999 to mid of year 2001 and then upward trend from year onwards. <br>
+3)We observe some seasonality in the series.Seasonality describes cyclical effects due to the time of the year.<br>
+
+Let's explore this seasonality pattern by plotting the decomp$seasonal components such that y-axis represents Seasonality Index and x-axis has month
+
+
+#Plotting the decomposed series
+```{r}
+plot(decomp7$seasonal[1:365], type ='b', xlab = 'Years', ylab = 'Seasonality Index', col = 'blue', las = 2, main = "SEASONAL DATA")
+```
+**OBSERVATIONS:**  
+
+1) There is increase in KI for mid month of the year<br>
+2) There is a huge drop of KI for starting and end months of the year <br>
+
+
+#Stationarity check of time series 
+
+We could check the stationarity of time series by ADF and KPSS Tests:
+
+1. Augmented Dickey- Fuller(ADF) t-statistic test for unit root <br>
+2. Kwiatkowski-Phillips-Schmidt-Shin (KPSS) for level or trend stationarity<br>
+
+```{r}
+adf.test(tsKI.imp)
+```
+#p-value is smaller, hence series is stationary
+```{r}
+kpss.test(tsKI.imp, null = "Trend")
+```
+#series is not stationary
+```{r}
+acf(tsKI.imp,lag.max = length(tsT70.imp),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+
+Here, we observes most of the data lies outside the blue-dotted lines means the significance level.<br>
+Now, we will take the difference to make our data stationary.
+
+It seems difference of 1 is sufficient to make the series stationary. <br>
+```{r}
+tsKI.sta <- diff(tsKI.imp)
+acf(tsKI.sta, lag.max = length(tsKI.sta),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+
+Hence, after differencing our series is now transformed to stationary time series.
+
+#CREATING MODELS AND FORECASTING: USING EXPONENTIAL SMOOTHING AND ARIMA TECHNIQUES FOR TIME SERIES FORECASTING
+
+#Visualising the stationary series
+```{r}
+#plotting the transformed stationary series
+plot(tsKI.sta, col = "red")
+```
+
+1. TRAIN- TEST SET SPLIT
+```{r}
+train7 <- window(tsKI.imp, end = c(2004, 3))
+test7 <- window(tsKI.imp, start = c(2004, 4))
+```
+
+#Model 1 : Auto Exponential Smoothening Model
+```{r}
+set.seed(301)
+fit_auto_train_Var8 <- forecast(train7)
+summary(fit_auto_train_Var8)
+```
+##NOTE: AIC = 28718.12  , BIC = 28735.20 , RMSE = 14.87674
+
+Also, the headline of the plot below contains ETS(A,N,N) showing that the automated model characterized error of the “tsWSR_PK” SERIES as Additative (A), trend as None (A) and seasonality as None (N) which is equivalent to simple exponential model(ses) with only alpha parameter i.e level.
+
+#Model 2 : ARIMA Models(AutoRegressive Moving Average) 
+It is used for forecasting for both seasonal and non- seasonal level.
+
+#Changing to stationary set
+```{r}
+train.sta_Var8 <- diff(train7)
+test.sta_Var8 <- diff(test7)
+```
+
+#2.1 Auto Arima model without sesonality:
+```{r}
+set.seed(301)
+model_Var8 <- auto.arima(train.sta_Var8, seasonal = FALSE)
+summary(model_Var8)
+```
+
+NOTE: AIC = 18210.98  , BIC = 18245.14 , RMSE = 15.36312 
+
+```{r}
+tsdisplay(residuals(model_Var8), lag.max = 45, main = '(1,1,1) Model Residuals')
+```
+
+#2.2 Auto Arima model with sesonality:
+```{r}
+set.seed(301)
+model2_Var8 <- auto.arima(train.sta_Var8, seasonal= TRUE)
+summary(model2_Var8)
+```
+##NOTE: AIC = 18210.98  , BIC = 18245.14 , RMSE = 15.36312
+```{r}
+tsdisplay(residuals(model2_Var8), lag.max = 20, main = 'Seasonal Model Residuals')
+```
+
+NOTE: Above Graphs shows serious lags at 13
+
+#2.3 Manual Arima
+Passing parameter order = (2,0,13) which means p(member of lags of a variable to be used as a predictor) = 1,
+d = 0(members of differences needed for stationarity) and q = 18 (moving average order - number of lagged forecasts error in the prediction equation)
+
+```{r}
+set.seed(301)
+model1_Var8 <- arima(train.sta_Var8, order = c(2,0,13))
+summary(model1_Var8)
+```
+##NOTE: AIC = 18221.59  , RMSE = 15.32315
+```{r}
+tsdisplay(residuals(model1_Var8), lag.max = 20, main = 'Seasonal Model Residuals')
+```
+
+Note: It seems good fit.
+
+
+***Fit the observed with the predicted values for both models in the same plot. ***
+
+```{r}
+par(mfrow = c(2,2))
+fit_auto_train_Var8 %>% forecast(h=341) %>% autoplot() 
+model1_Var8 %>% forecast(h=341) %>% autoplot() 
+model2_Var8 %>% forecast(h=341) %>% autoplot() 
+model_Var8 %>% forecast(h=341) %>% autoplot() 
+```
+
+COMMENT:<br>
+1. The plots includes 80% to 95% confidence interval.<br>
+2. For ARIMA models it plots the forecast but because of the nature of autoregressive process of 2 lags, these forecast stabilizes quite smoothly.<br>
+
+
+***Plot and comment on the residuals of the fitted data for both models in the same plot.***
+ 
+Residual Plot - to confirm no problem with this model
+
+```{r}
+par(mfrow= c(2,2))
+hist(fit_auto_train_Var8$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(fit_auto_train_Var8$residuals))
+
+hist(model_Var8$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model_Var8$residuals))
+
+hist(model1_Var8$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model1_Var8$residuals))
+
+hist(model2_Var8$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model2_Var8$residuals))
+```
+
+OBSERVATION: The residuals for each model are normally distributed, which shows the good fit of the models.
+It is normally distrbuted.
+
+***Testing the autocorrelation and partial autocorrelation of the residuals (using the plots and Ljung-Box Q statistic*) up to an appropriate lag ***
+
+1. ACF & PACF Plots
+```{r}
+par(mfrow = c(4,2))
+acf(fit_auto_train_Var8$residuals, main = 'Correlogram')
+pacf(fit_auto_train_Var8$residuals, main = 'Partial Corelogram')
+
+acf(model_Var8$residuals, main = 'Correlogram')
+pacf(model_Var8$residuals, main = 'Partial Corelogram')
+
+acf(model1_Var8$residuals, main = 'Correlogram')
+pacf(model1_Var8$residuals, main = 'Partial Corelogram')
+
+acf(model2_Var8$residuals, main = 'Correlogram')
+pacf(model2_Var8$residuals, main = 'Partial Corelogram')
+```
+
+NOTE: <br>
+1. Residuals are the difference between actaual and fitted values<br>
+2. These blue lines are signficance bounds<br>
+3. This graph shows us the autocorelations for insample forecast errors<br>
+4. Do not exceed these significance bounds for lags 1 to end<br>
+
+2. Ljunx-Box Test to check the autocorelations of the residuals
+
+HO: No serial correlation upto 20 lags (does not exhibit lack of fit of the model)<br>
+Ha: Serial corelation is present (the model exhibits lack of fit)<br>
+
+We reject the null hypothesis, if p value is less than 0.05. This test is generally done for ARIMA models
+
+```{r}
+Box.test(model_Var8$residuals, lag =20, type = 'Ljung-Box')
+Box.test(model1_Var8$residuals, lag =20, type = 'Ljung-Box')
+Box.test(model2_Var8$residuals, lag =20, type = 'Ljung-Box')
+```
+
+OBSERVATIONS: For above performed Ljunx-Box Test on ARIMA models output, we can say that p-value is more than significance level 0.05, then there is not a statistical significance.<br>
+We conclude that there is a liitle evidence of non-zero auto-corelations in the insample forecast errors at lags 1 to 20.<br>
+So we fail to rejects the null hypothesis. Hence, we conclude that there is no serial auto corelation present between lags. Hence, the model seems to be good fit.
+
+```{r}
+par(mfrow = c(2,2))
+qqnorm(fit_auto_train_Var8$residuals)
+qqnorm(model_Var8$residuals)
+qqnorm(model1_Var8$residuals)
+qqnorm(model2_Var8$residuals)
+```
+
+***Validating The Model by testing the model performance with Holdout set ***
+
+Here, choosing RMSE as evaluation parameter. The lower RMSE indicates a more accurate forecast.
+
+Below, is the comparison of model. We are fitting the model to test set which is the holdout set. And checking the accuracy using RMSE(Root mean square error) evaluation parameter. 
+
+
+```{r}
+accuracy(forecast(fit_auto_train_Var8), test7) ["Test set", "RMSE"]
+#o/p - 22.98142
+```
+
+```{r}
+accuracy(forecast(model1_Var8), test.sta_Var8) ["Test set", "RMSE"]
+#O/P - 16.92509
+```
+
+```{r}
+accuracy(forecast(model2_Var8), test.sta_Var8) ["Test set", "RMSE"]
+#o/p - 16.9194
+```
+
+```{r}
+accuracy(forecast(model_Var8), test.sta_Var8) ["Test set", "RMSE"]
+#O/P - 16.9194
+```
+NOTE:- Here, the RMSE value is less of ARIMA models compared to exponential model.<br>
+The minimum RMSE is of model2_Var8 <br>
+
+
+***COMMENT ON BEST MODEL AND ITS PARAMETERS***
+
+We observed the best model to be ARIMA model i.e."model2_Var8".
+
+```{r}
+summary(model2_Var8)
+```
+
+Best model is ARIMA(2,0,3) ,which means
+
+p = 2
+d = 0
+q = 3 
+
+For the best model, 2 member of lag is used as a predictor. As we transformed the series to stationary so members of differences needed for stationarity is 0. 3 are the number of lagged forecasts errors used in the prediction equation.<br>
+AIC = 18210.98, RMSE = 15.36312 which is minimum as compared to other models.
+
+
+**9. Forecasting on T-Totals**
+
+#Checking the attributes of time series
+
+```{r}
+attributes(tsTT)
+```
+#Plotting the series 
+```{r}
+plot(tsTT, main = " T-Totals ", col = "red")
+```
+From the plot, we observes that there seems to have no trend but seems to have seasonlity.<br>
+
+Checking the statistics and visualising the missing data in the series:
+
+```{r}
+plotNA.distribution(tsTT)
+```  
+
+As data is missing at random. Hence, using na_locf method to impute the missing data.
+
+#Impute the missing values with "na_locf" function of "imputeTS package" and visualise the imputed values in the time series
+
+```{r}
+tsTT.imp <- na_locf(tsTT)
+plotNA.imputations(tsTT, tsTT.imp)
+```
+#Decomposition Of Time Series
+```{r}
+decomp8 <- decompose(tsTT.imp)
+plot(decomp8, col = "red")
+```
+**OBSERVATIONS:**<br>
+1)There seems to have trend.<br>
+2)We observes the upward trend from year 2000 to 2003 and then further downward trend till 2004.  <br>
+3)We observe some seasonality in the series. Seasonality describes cyclical effects due to the time of the year.
+
+Let's explore this seasonality pattern by plotting the decomp$seasonal components such that y-axis represents Seasonality Index and x-axis has month.<br>
+
+```{r}
+plot(decomp8$seasonal[1:365], type ='b', xlab = 'Years', ylab = 'Seasonality Index', col = 'blue', las = 2, main = "SEASONAL DATA")
+```
+**OBSERVATIONS:**  <br>
+1) There is increase in TT for mid month of the year<br>
+2) There is a huge drop of TT for starting and end months of the year.<br>
+
+# Stationarity check of time series 
+
+We could check the stationarity of time series by ADF and KPSS Tests:
+
+1. Augmented Dickey- Fuller(ADF) t-statistic test for unit root<br>
+2. Kwiatkowski-Phillips-Schmidt-Shin (KPSS) for level or trend stationarity
+
+```{r}
+adf.test(tsTT.imp)
+```
+#P-value is smaller so it is stationary. 
+
+```{r}
+kpss.test(tsTT.imp, null="Trend")
+```
+#P-value is greater than 0.05, which shows trend statationary.
+
+Second, we can check each for characteristics of stationarity by looking at the autocorrelation functions (ACF) of each signal. For a stationary signal, because we expect no dependence with time, we would expect the ACF to go to 0 for each time lag (τ). Lets visualize the signals and ACFs.
+  
+```{r}
+acf(tsTT.imp,lag.max = length(tsTT.imp),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+
+Here, we observes most of the data lies outside the blue-dotted lines means the significance level.<br>
+Now, we will take the difference to make our data stationary.
+
+It seems difference of 1 is sufficient to make the series stationary. 
+```{r}
+tsTT.sta <- diff(tsTT.imp)
+acf(tsTT.sta, lag.max = length(tsTT.sta),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+
+Hence, after differencing our series is now transformed to stationary time series.
+
+#CREATING MODELS AND FORECASTING: USING EXPONENTIAL SMOOTHING AND ARIMA TECHNIQUES FOR TIME SERIES FORECASTING
+
+1.Train - Test Split of the data
+
+```{r}
+train8 <- window(tsTT.imp, end = c(2004, 3))
+test8 <- window(tsTT.imp, start = c(2004, 4))
+```
+
+#Model 1 : Auto Exponential Smoothening Model
+```{r}
+set.seed(301)
+fit_auto_train_Var9 <- forecast(train8)
+summary(fit_auto_train_Var9)
+```
+##NOTE: AIC = 26480.80  , BIC = 26497.88 , RMSE = 8.932469 
+
+Also, the headline of the plot below contains ETS(A,N,N) showing that the automated model characterized error of the “tsWSR_PK” SERIES as Additative (A), trend as None (A) and seasonality as None (N) which is equivalent to simple exponential model(ses) with only alpha parameter i.e level.
+
+
+#Model 2 : ARIMA Model(AutoRegressive Moving Average) 
+
+It is used for forecasting for both seasonal and non- seasonal level.
+
+#Changing to stationary set
+```{r}
+train.sta_Var9 <- diff(train8)
+test.sta_Var9 <- diff(test8)
+```
+
+#2.1 Auto Arima model without sesonality:
+```{r}
+set.seed(301)
+model_Var9 <- auto.arima(train.sta_Var9, seasonal = FALSE)
+summary(model_Var9)
+```
+##NOTE: AIC = 15970.47  , BIC = 15993.24 , RMSE = 9.223455
+```{r}
+tsdisplay(residuals(model_Var9), lag.max = 45, main = '(1,1,1) Model Residuals')
+```
+
+#2.2 Auto Arima model with sesonality:
+```{r}
+set.seed(301)
+model2_Var9 <- auto.arima(train.sta_Var9, seasonal= TRUE)
+summary(model2_Var9)
+```
+##NOTE: AIC = 15975.95  , BIC = 16027.18 , RMSE = 9.213898
+```{r}
+tsdisplay(residuals(model2_Var9), lag.max = 20, main = 'Seasonal Model Residuals')
+```
+
+NOTE: Above Graphs does not shows any serious lags.This indicates the good fit of the model.
+
+***Fit the observed with the predicted values for both models in the same plot. ***
+
+```{r}
+par(mfrow = c(2,2))
+fit_auto_train_Var9 %>% forecast(h=341) %>% autoplot() 
+model2_Var9 %>% forecast(h=341) %>% autoplot() 
+model_Var9 %>% forecast(h=341) %>% autoplot() 
+```
+
+COMMENT:<br>
+1. The plots includes 80% to 95% confidence interval.<br>
+2. For ARIMA models it plots the forecast but because of the nature of autoregressive process, these forecast stabilizes quite smoothly.<br>
+
+***Plot and comment on the residuals of the fitted data for both models in the same plot.***
+ 
+Residual Plot - to confirm no problem with this model
+```{r}
+par(mfrow= c(2,2))
+hist(fit_auto_train_Var9$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(fit_auto_train_Var9$residuals))
+
+hist(model_Var9$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model_Var9$residuals))
+
+hist(model2_Var9$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model2_Var9$residuals))
+```
+OBSERVATION:<br>
+The residuals for each model are normally distributed, which shows the good fit of the models.However, on comparing all three models, residuals of "model_Var9" are normally distributed.
+
+***Testing the autocorrelation and partial autocorrelation of the residuals (using the plots and Ljung-Box Q statistic*) up to an appropriate lag ***
+
+1. ACF & PACF Plots
+```{r}
+par(mfrow = c(3,2))
+acf(fit_auto_train_Var9$residuals, main = 'Correlogram')
+pacf(fit_auto_train_Var9$residuals, main = 'Partial Corelogram')
+
+acf(model_Var9$residuals, main = 'Correlogram')
+pacf(model_Var9$residuals, main = 'Partial Corelogram')
+
+acf(model2_Var9$residuals, main = 'Correlogram')
+pacf(model2_Var9$residuals, main = 'Partial Corelogram')
+```
+
+NOTE: <br>
+1. Residuals are the difference between actaual and fitted values<br>
+2. These blue lines are signficance bounds<br>
+3. This graph shows us the autocorelations for insample forecast errors<br>
+4. Do not exceed these significance bounds for lags 1 to end<br>
+
+#Ljunx-Box Test to check the autocorelations of the residuals
+
+HO: No serial correlation upto 20 lags (does not exhibit lack of fit of the model)<br>
+Ha: Serial corelation is present (the model exhibits lack of fit)<br>
+
+We reject the null hypothesis, if p value is less than 0.05. This test is generally done for ARIMA models
+
+```{r}
+Box.test(model_Var9$residuals, lag =20, type = 'Ljung-Box')
+Box.test(model2_Var9$residuals, lag =20, type = 'Ljung-Box')
+```
+OBSERVATIONS: For above performed Ljunx-Box Test on both the ARIMA models output, we can say that p-value is more than significance level 0.05, then there is not a statistical significance.<br>
+We conclude that there is a liitle evidence of non-zero auto-corelations in the insample forecast errors at lags 1 to 20.<br>
+So we fail to rejects the null hypothesis. Hence, we conclude that there is no serial auto corelation present between lags. Hence, the model seems to be good fit.
+
+***Test and comment on the normality of the residuals. ***
+
+Here, further testing the normality by plotting Normal Q-Q plots. From below plots we observed that most of the datapoints lies on the line. Hence, we could conclude that our model produces residuals that are normal
+
+```{r}
+par(mfrow = c(2,2))
+qqnorm(fit_auto_train_Var9$residuals)
+qqnorm(model_Var9$residuals)
+qqnorm(model2_Var9$residuals)
+```
+
+
+#Validating The Model by testing the model performance with Holdout set
+
+Here, choosing RMSE as evaluation parameter. The lower RMSE indicates a more accurate forecast.
+
+Below, is the comparison of model. We are fitting the model to test set which is the holdout set. And checking the accuracy using RMSE(Root mean square error) evaluation parameter. 
+
+```{r}
+accuracy(forecast(fit_auto_train_Var9), test8) ["Test set", "RMSE"]
+```
+#o/p - 11.11376
+```{r}
+accuracy(forecast(model2_Var9), test.sta_Var9) ["Test set", "RMSE"]
+```
+#o/p - 9.527655
+```{r}
+accuracy(forecast(model_Var9), test.sta_Var9) ["Test set", "RMSE"]
+```
+#O/P - 9.523064
+
+NOTE:- Here, the RMSE value is less for ARIMA models compared to exponential model.<br>
+The minimum RMSE is of model_Var9. Hence, it is forecasting better than other models in comparision. <br>
+However, The RMSE of auto arima models with seasonality and without seasonality have not much  difference. It gives the same result for this series.
+
+
+***COMMENT ON BEST MODEL AND ITS PARAMETERS***
+
+We observed the best model to be ARIMA model i.e."model_Var9".
+
+```{r}
+summary(model_Var9)
+```
+
+Passing parameter order = (2,0,1) ,which means 
+
+p = 2<br>
+d = 0<br>
+q = 1 <br>
+
+For the best model, 2 members of lag are used as a predictor. As we transformed the series to stationary so members of differences needed for stationarity is 0. 1 is the number of lagged forecasts errors used in the prediction equation.
+
+AIC = 15970.47, RMSE = 9.223455 which is minimum as compared to other models.
+
+
+**10. Forecasting on Sea level pressure (SLP)**
+
+#Checking the attributes of time series
+```{r}
+attributes(tsSLP)
+```
+
+#Plotting the series
+```{r}
+plot(tsSLP, main = "Sea level pressure  (tsSLP)", col = "red")
+```
+
+From the plot, we observes there might be presence of some trend and seems to have seasonlity.<br>
+
+Checking the statistics and visualising the missing data in the series:
+
+#Visualising the distribution of missing data
+```{r}
+plotNA.distribution(tsSLP)
+```
+As we observes the data is missing at random, so locf and NOCB seems the good technique to implement here. 
+
+#Impute the missing values with "na_locf" function of "imputeTS package" and visualise the imputed values in the time series
+```{r}
+tsSLP.imp <- na_locf(tsSLP)
+plotNA.imputations(tsSLP, tsSLP.imp)
+```
+
+#Decomposition Of Time Series
+```{r}
+decomp9 <- decompose(tsSLP.imp)
+plot(decomp9, col = "red")
+```
+
+**OBSERVATIONS:**<br>
+1)There seems to have trend.<br>
+2)We observes upward trend from year 1998 to 2001 and downward trend from year 2001 to 2003. <br>  
+3)We observe some seasonality in the series. Seasonality describes cyclical effects due to the time of the year.
+
+Let's explore this seasonality pattern by plotting the decomp$seasonal components such that y-axis represents Seasonality Index and x-axis has month
+
+#Plotting the decomposed series
+```{r}
+par(mfrow =c (1,2))
+plot(decomp9$seasonal, type ='b', xlab = 'Years', ylab = 'Seasonality Index', col = 'blue', las = 2, main = "SEASONAL DATA")
+plot(decomp9$seasonal[1:365], type ='b', xlab = 'Years', ylab = 'Seasonality Index', col = 'blue', las = 2, main = "SEASONAL DATA")
+```
+**OBSERVATIONS:**  
+
+1) The plot shows a strong and significant sea level presuure in winter and summer.<br>
+2) Also, no increase in the transition seasons.
+
+# Stationarity check of time series 
+
+We could check the stationarity of time series by ADF and KPSS Tests:
+
+1. Augmented Dickey- Fuller(ADF) t-statistic test for unit root<br>
+2. Kwiatkowski-Phillips-Schmidt-Shin (KPSS) for level or trend stationarity
+
+```{r}
+adf.test(tsSLP.imp)
+```
+#p-vaue is smaller, hence it is stationary 
+
+```{r}
+kpss.test(tsSLP.imp, null="Trend")
+```
+#p-vaue is smaller, hence it is not trend stationary
+
+NOTE: From the both tests results, it leads to CASE4, we could recheck by visualising it i.e. by plotting ACF. 
+Second, we can check each for characteristics of stationarity by looking at the autocorrelation functions (ACF) of each signal. For a stationary signal, because we expect no dependence with time, we would expect the ACF to go to 0 for each time lag (τ). Lets visualize the signals and ACFs.
+
+Plotting ACF to check the auto-corelations 
+
+```{r}
+acf(tsSLP.imp,lag.max = length(tsSLP.imp),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+
+Here, we observes most of the data lies outside the blue-dotted lines means the significance level.
+Now, we will take the difference to make our data stationary.
+
+It seems difference of 1 is sufficient to make the series stationary. 
+
+```{r}
+tsSLP.sta <- diff(tsSLP.imp)
+acf(tsSLP.sta, lag.max = length(tsSLP.sta),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+Hence, after differencing our series is now transformed to stationary time series.
+
+#Visualising the stationary series
+
+```{r}
+plot(tsSLP.sta, col = "red")
+```
+
+#CREATING MODELS AND FORECASTING: USING EXPONENTIAL SMOOTHING AND ARIMA TECHNIQUES FOR TIME SERIES FORECASTING
+
+1. TRAIN- TEST SET SPLIT
+```{r}
+train9 <- window(tsSLP.imp, end = c(2004, 3))
+test9 <- window(tsSLP.imp, start = c(2004, 4))
+```
+
+#Model 1 : Auto Exponential Smoothening Model
+```{r}
+set.seed(301)
+fit_auto_train_Var10 <- forecast(train9)
+summary(fit_auto_train_Var10)
+```
+##NOTE: AIC = 32047.14  , BIC = 32064.22  , RMSE = 31.77912  
+Also, the headline of the plot below contains ETS(A,N,N) showing that the automated model characterized error of the “tsWSR_PK” SERIES as Additative (A), trend as None (A) and seasonality as None (N) which is equivalent to simple exponential model(ses) with only alpha parameter i.e level.
+
+
+#Model 2 : ARIMA Model
+
+#Changing to stationary set(AutoRegressive Moving Average) 
+It is used for forecasting for both seasonal and non- seasonal level.
+
+#Changing to stationary set
+
+```{r}
+train.sta_Var10 <- diff(train9)
+test.sta_Var10 <- diff(test9)
+```
+
+#2.1 Auto Arima model without sesonality:
+```{r}
+set.seed(301)
+model_Var10 <- auto.arima(train.sta_Var10, seasonal = FALSE)
+summary(model_Var10)
+```
+##NOTE: AIC = 21325.67  , BIC = 21359.83  , RMSE = 31.26308 
+```{r}
+tsdisplay(residuals(model_Var10), lag.max = 45, main = '(1,1,1) Model Residuals')
+```
+
+#2.2 Auto Arima model with sesonality:
+```{r}
+set.seed(301)
+model2_Var10 <- auto.arima(train.sta_Var10, seasonal= TRUE)
+summary(model2_Var10)
+```
+##NOTE: AIC = 21325.67  , BIC = 21359.83 , RMSE = 31.26308
+```{r}
+tsdisplay(residuals(model2_Var10), lag.max = 20, main = 'Seasonal Model Residuals')
+```
+NOTE: Above Graphs shows serious lags at 13, so modify model for p or q = 13
+
+3. Manual ARIMA: 
+
+Passing parameter order = (3,0,13) which means p(member of lags of a variable to be used as a predictor) = 3,
+d = 0(members of differences needed for stationarity) and q = 13 (moving average order - number of lagged forecasts error in the prediction equation)
+
+```{r}
+set.seed(301)
+model1_Var10 <- arima(train.sta_Var10, order = c(3,0,13))
+summary(model1_Var10)
+```
+##NOTE: AIC = 21325.57   , RMSE = 31.0898
+
+```{r}
+tsdisplay(residuals(model1_Var10), lag.max = 20, main = 'Seasonal Model Residuals')
+```
+
+Note: It seems good fit.
+
+***Fit the observed with the predicted values for both models in the same plot. ***
+
+#Plotting forecast for each model
+```{r}
+par(mfrow = c(2,2))
+fit_auto_train_Var10 %>% forecast(h=341) %>% autoplot() 
+model1_Var10 %>% forecast(h=341) %>% autoplot() 
+model2_Var10 %>% forecast(h=341) %>% autoplot() 
+model_Var10 %>% forecast(h=341) %>% autoplot() 
+```
+
+COMMENT:<br>
+1. The plots includes 80% to 95% confidence interval.<br>
+2. For ARIMA models it plots the forecast but because of the nature of autoregressive process of 3 lags i.e. AR3, these forecast stabilizes quite smoothly.<br>
+
+***Plot and comment on the residuals of the fitted data for both models in the same plot.***
+ 
+Residual Plot - to confirm no problem with this model
+
+```{r}
+par(mfrow= c(2,2))
+hist(fit_auto_train_Var10$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(fit_auto_train_Var10$residuals))
+
+hist(model_Var10$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model_Var10$residuals))
+
+hist(model1_Var10$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model1_Var10$residuals))
+
+hist(model2_Var10$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model2_Var10$residuals))
+```
+OBSERVATION: The residuals for each model are normally distributed, which shows the good fit of the models.
+It is normally distrbuted.
+ 
+***Testing the autocorrelation and partial autocorrelation of the residuals (using the plots and Ljung-Box Q statistic*) up to an appropriate lag ***
+
+
+1. ACF & PACF PLOTS
+```{r}
+par(mfrow = c(4,2))
+acf(fit_auto_train_Var10$residuals, main = 'Correlogram')
+pacf(fit_auto_train_Var10$residuals, main = 'Partial Corelogram')
+
+acf(model_Var10$residuals, main = 'Correlogram')
+pacf(model_Var10$residuals, main = 'Partial Corelogram')
+
+acf(model1_Var10$residuals, main = 'Correlogram')
+pacf(model1_Var10$residuals, main = 'Partial Corelogram')
+
+acf(model2_Var10$residuals, main = 'Correlogram')
+pacf(model2_Var10$residuals, main = 'Partial Corelogram')
+```
+
+NOTE: <br>
+1. Residuals are the difference between actaual and fitted values<br>
+2. These blue lines are signficance bounds<br>
+3. This graph shows us the autocorelations for insample forecast errors<br>
+4. Do not exceed these significance bounds for lags 1 to end
+
+2. Ljunx-Box Test to check the autocorelations of the residuals
+
+HO: No serial correlation upto 20 lags (does not exhibit lack of fit of the model)<br>
+Ha: Serial corelation is present (the model exhibits lack of fit)<br>
+
+We reject the null hypothesis, if p value is less than 0.05. This test is generally done for ARIMA models
+
+```{r}
+Box.test(model_Var10$residuals, lag =20, type = 'Ljung-Box')
+Box.test(model1_Var10$residuals, lag =20, type = 'Ljung-Box')
+Box.test(model2_Var10$residuals, lag =20, type = 'Ljung-Box')
+```
+
+OBSERVATIONS: <br>
+For above performed Ljunx-Box Test on ARIMA models, we can say that p-value is more than significance level 0.05, then there is not a statistical significance. <br>
+We conclude that there is a liitle evidence of non-zero auto-corelations in the insample forecast errors at lags 1 to 20. <br>
+So we fail to rejects the null hypothesis. Hence, we conclude that there is no serial auto corelation present between lags. Hence, the model seems to be good fit.<br>
+
+***Test and comment on the normality of the residuals. ***
+
+Here, further testing the normality by plotting Normal Q-Q plots. From below plots we observed that most of the datapoints lies on the line. Hence, we could conclude that our model produces residuals that are normal
+
+```{r}
+par(mfrow = c(2,2))
+qqnorm(fit_auto_train_Var10$residuals)
+qqnorm(model_Var10$residuals)
+qqnorm(model1_Var10$residuals)
+qqnorm(model2_Var10$residuals)
+```
+
+***Validating The Model by testing the model performance with Holdout set ***
+
+Here, choosing RMSE as evaluation parameter. The lower RMSE indicates a more accurate forecast.
+
+Below, is the comparison of model. We are fitting the model to test set which is the holdout set. And checking the accuracy using RMSE(Root mean square error) evaluation parameter. 
+
+```{r}
+accuracy(forecast(fit_auto_train_Var10), test9) ["Test set", "RMSE"]
+```
+#o/p - 157.3138
+```{r}
+accuracy(forecast(model1_Var10), test.sta_Var10) ["Test set", "RMSE"]
+```
+#O/P - 35.2608
+```{r}
+accuracy(forecast(model2_Var10), test.sta_Var10) ["Test set", "RMSE"]
+```
+#o/p - 35.00271
+```{r}
+accuracy(forecast(model_Var10), test.sta_Var10) ["Test set", "RMSE"]
+#O/P - 35.00271
+```
+
+NOTE:- Here, the RMSE value is less of ARIMA models compared to exponential model.<br>
+The minimum RMSE is of model2_Var10 <br>
+
+***COMMENT ON BEST MODEL AND ITS PARAMETERS***
+
+We observed the best model to be ARIMA model i.e."model2_Var10".
+
+```{r}
+summary(model2_Var10)
+```
+
+The best forecasted model is ARIMA(3,0,3) ,which means 
+
+p = 3 <br>
+d = 0 <br>
+q = 3 <br>
+
+For the best model, 3 member of lag are used as a predictor. As we transformed the series to stationary so members of differences needed for stationarity is 0. 3 are the number of lagged forecasts errors used in the prediction equation.<br>
+
+AIC = 21325.67, RMSE = 31.26308 which is minimum as compared to other models.
+
+***11. Forecasting on SLP change from previous day(SLP_) ***
+
+#Checking the attributes of time series
+
+```{r}
+attributes(tsSLP_)
+```
+
+#Plotting the series 
+```{r}
+plot(tsSLP_, main = "SLP change from previous day ", col = "red")
+```
+
+From the plot, we observes that there is absence of trend and seems to have seasonlity.<br>
+
+Checking the statistics and visualising the missing data in the series:
+
+#Visualising the distribution of missing data
+
+```{r}
+plotNA.distribution(tsSLP_)
+```
+
+As we see there is the missing data which is missed at random, so locf and NOCB seems the good technique to implement here. 
+
+#Impute the missing values with "na_locf" function of "imputeTS package" and visualise the imputed values in the time series
+
+```{r}
+tsSLP_.imp <- na_locf(tsSLP_)
+plotNA.imputations(tsSLP_, tsSLP_.imp)
+```
+
+#Decomposition Of Time Series
+
+```{r}
+decomp10 <- decompose(tsSLP_.imp)
+plot(decomp10, col = "red")
+```
+
+**OBSERVATIONS:**<br>
+1)There does not seems to have trend.<br>
+2)We observe some seasonality in the series. Seasonality describes cyclical effects due to the time of the year.
+
+Let's explore this seasonality pattern by plotting the decomp$seasonal components such that y-axis represents Seasonality Index and x-axis has month
+
+#Plotting the decomposed series
+
+```{r}
+plot(decomp10$seasonal[1:365], type ='b', xlab = 'Years', ylab = 'Seasonality Index', col = 'blue', las = 2, main = "SEASONAL DATA")
+```
+
+**OBSERVATIONS:**  
+
+1) The plot shows a strong and significant sea level presuure in winter and summer.<br>
+2) Also, no increase in the transition seasons.
+
+#Stationarity check of time series 
+We could check the stationarity of time series by ADF and KPSS Tests:
+
+1. Augmented Dickey- Fuller(ADF) t-statistic test for unit root
+
+If we fail to reject the null hypothesis, we can say that the series is non-stationary. This means that the series can be linear or difference stationary[5]
+
+```{r}
+adf.test(tsSLP_.imp)
+```
+NOTE: p-value is smaller, hence stationary
+
+2. Kwiatkowski-Phillips-Schmidt-Shin (KPSS) for level or trend stationarity
+
+KPSS is another test for checking the stationarity of a time series.The null and alternate hypothesis for the KPSS test are opposite that of the ADF test,
+
+```{r}
+kpss.test(tsSLP_.imp, null="Trend")
+```
+
+NOTE: p-value is greater, hence stationary 
+
+Plotting ACF to check the auto-corelations
+
+```{r}
+acf(tsSLP_.imp,lag.max = length(tsSLP_.imp),xlab = "lag #", ylab = 'ACF',main='Statiionary Check ')
+```
+NOTE: Here, we observe the data lies inside the blue-dotted lines means the significance level.
+
+
+#CREATING MODELS AND FORECASTING: USING EXPONENTIAL SMOOTHING AND ARIMA TECHNIQUES FOR TIME SERIES FORECASTING
+
+
+1. TRAIN- TEST SET SPLIT
+
+```{r}
+train10 <- window(tsSLP_.imp, end = c(2004, 3))
+test10 <- window(tsSLP_.imp, start = c(2004, 4))
+```
+
+#Model 1 : Auto Exponential Smoothening Model
+
+```{r}
+set.seed(301)
+fit_auto_train_Var11 <- forecast(train10)
+summary(fit_auto_train_Var11)
+```
+##NOTE: AIC = 31986.86 , BIC = 32003.94, RMSE = 31.34532
+
+Also, the headline of the plot below contains ETS(A,N,N) showing that the automated model characterized error of the “tsWSR_PK” SERIES as Additative (A), trend as None (A) and seasonality as None (N) which is equivalent to simple exponential model(ses) with only alpha parameter i.e level.
+
+#Model 2 : ARIMA Model(AutoRegressive Moving Average) 
+It is used for forecasting for both seasonal and non- seasonal level.
+
+#2.1 Auto Arima model without sesonality:
+
+```{r}
+set.seed(301)
+model_Var11 <- auto.arima(train10, seasonal = FALSE)
+summary(model_Var11)
+```
+##NOTE: AIC = 21414.55, BIC = 21443.01, RMSE = 31.85287 
+
+```{r}
+tsdisplay(residuals(model_Var11), lag.max = 45, main = '(1,1,1) Model Residuals')
+```
+
+#2.2 Auto Arima model with sesonality:
+```{r}
+set.seed(301)
+model2_Var11 <- auto.arima(train10, seasonal= TRUE)
+summary(model2_Var11)
+```
+
+##NOTE: AIC = 21416.34, BIC = 21456.19, RMSE = 31.83673
+```{r}
+tsdisplay(residuals(model2_Var11), lag.max = 20, main = 'Seasonal Model Residuals')
+```
+
+#Plotting forecast for each model
+```{r}
+par(mfrow = c(2,2))
+fit_auto_train_Var11 %>% forecast(h=341) %>% autoplot() 
+model2_Var11 %>% forecast(h=341) %>% autoplot() 
+model_Var11 %>% forecast(h=341) %>% autoplot() 
+```
+
+COMMENT:<br>
+1. The plots includes 80% to 95% confidence interval.<br>
+2. For ARIMA models it plots the forecast but because of the nature of autoregressive process of 1 lag i.e. AR1, these forecast stabilizes quite smoothly.<br>
+
+
+***Plot and comment on the residuals of the fitted data for both models in the same plot.***
+ 
+Residual Plot - to confirm no problem with this model
+
+```{r}
+par(mfrow= c(3,2))
+hist(fit_auto_train_Var11$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(fit_auto_train_Var11$residuals))
+
+hist(model_Var11$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model_Var11$residuals))
+
+hist(model2_Var11$residuals,col = 'red',xlab = 'Error',main = 'Histogram Of Residuals',freq= FALSE)
+lines(density(model2_Var11$residuals))
+```
+OBSERVATION: The residuals for each model are normally distributed, which shows the good fit of the models.
+It is normally distrbuted
+
+ 
+***Testing the autocorrelation and partial autocorrelation of the residuals (using the plots and Ljung-Box Q statistic*) up to an appropriate lag ***
+
+#ACF & PACF PLOTS
+```{r}
+par(mfrow = c(3,2))
+acf(fit_auto_train_Var11$residuals, main = 'Correlogram')
+pacf(fit_auto_train_Var11$residuals, main = 'Partial Corelogram')
+
+acf(model_Var11$residuals, main = 'Correlogram')
+pacf(model_Var11$residuals, main = 'Partial Corelogram')
+
+acf(model2_Var11$residuals, main = 'Correlogram')
+pacf(model2_Var11$residuals, main = 'Partial Corelogram')
+```
+NOTE: <br> 
+1. Residuals are the difference between actaual and fitted values<br>
+2. These blue lines are signficance bounds<br>
+3. This graph shows us the autocorelations for insample forecast errors <br>
+4. Do not exceed these significance bounds for lags 1 to end <br>
+
+2. Ljunx-Box Test to check the autocorelations of the residuals
+
+This test used to test the lack of fit of a time series model.<br>
+This test is applied to the residuals of the time series model,
+
+HO: No serial correlation upto 20 lags (does not exhibit lack of fit of the model)<br>
+Ha: Serial corelation is present (the model exhibits lack of fit)
+
+We reject the null hypothesis, if p value is less than 0.05. This test is generally done for ARIMA models
+
+
+```{r}
+Box.test(model_Var11$residuals, lag =20, type = 'Ljung-Box')
+Box.test(model2_Var11$residuals, lag =20, type = 'Ljung-Box')
+```
+
+OBSERVATIONS:<br>
+For above performed Ljunx-Box Test on ARIMA models output, we can say that p-value is more than significance level 0.05, then there is not a statistical significance.<br>
+We conclude that there is a little evidence of non-zero auto-corelations in the insample forecast errors at lags 1 to 20.<br>
+So we fail to rejects the null hypothesis. Hence, we conclude that there is no serial auto corelation present between lags. Hence, the model seems to be good fit.
+
+***Test and comment on the normality of the residuals. ***
+
+Here, further testing the normality by plotting Normal Q-Q plots. From below plots we observed that most of the datapoints lies on the line. Hence, we could conclude that our model produces residuals that are normal
+
+```{r}
+par(mfrow = c(2,2))
+qqnorm(fit_auto_train_Var11$residuals)
+qqnorm(model_Var11$residuals)
+qqnorm(model2_Var11$residuals)
+```
+
+
+***Validating The Model by testing the model performance with Holdout set ***
+
+Here, choosing RMSE as evaluation parameter. The lower RMSE indicates a more accurate forecast.
+
+Below, is the comparison of model. We are fitting the model to test set which is the holdout set. And checking the accuracy using RMSE(Root mean square error) as an evaluation parameter. 
+
+```{r}
+accuracy(forecast(fit_auto_train_Var11), test10) ["Test set", "RMSE"]
+#o/p - 39.2348
+```
+
+```{r}
+accuracy(forecast(model_Var11), test10) ["Test set", "RMSE"]
+#O/P - 34.85059
+```
+
+```{r}
+accuracy(forecast(model2_Var11), test10) ["Test set", "RMSE"]
+#o/p - 34.81429
+```
+
+```{r}
+accuracy(forecast(model_Var11), test10) ["Test set", "RMSE"]
+#O/P - 34.81429
+```
+
+NOTE:- Here, the RMSE value is less for ARIMA models compared to exponential model.<br>
+The minimum RMSE is of "model2_Var11" <br>
+
+
+***COMMENT ON BEST MODEL AND ITS PARAMETERS***
+
+We observed the best model to be ARIMA model i.e."model2_Var11".
+
+```{r}
+summary(model2_Var11)
+```
+
+For the best model  ARIMA(4,0,2) ,which means 
+
+p = 4 <br>
+d = 0 <br>
+q = 2 <br>
+
+For the best model, 4 members of lag are used as a predictor. As the series is  stationary so members of differences needed for stationarity is 0.<br>
+2 are the number of lagged forecasts errors used in the prediction equation.<br>
+AIC = 21416.34, RMSE = 31.83673 which is minimum as compared to other models.
+AICc(corrected AIC) = 21416.39
+
+
+***REFERENCES***
+
+[1] https://cran.r-project.org/web/packages/imputeTS/vignettes/imputeTS-Time-Series-Missing-Value-Imputation-in-R.pdf<br>
+[2] https://www.kaggle.com/juejuewang/handle-missing-values-in-time-series-for-beginners<br>
+[3] https://towardsdatascience.com/how-to-handle-missing-data-8646b18db0d4<br>
+[4] https://otexts.com/fpp2/missing-outliers.html<br>
+[5] https://www.analyticsvidhya.com/blog/2018/09/non-stationary-time-series-python/<br>
+[6] https://johannesmehlem.com/blog/exponential-smoothing-time-series-forecasting-r/ <br>
+[7] Lecture Notes<br>
+
